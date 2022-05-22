@@ -1,0 +1,51 @@
+DNS cookies
+
+recursive parent zone mapper (e.g maps "subdomain.parentdomain.tld." => "parentdomain.org." instead of "subdomain.parendomain.tld." => "tld." )
+
+https://medium.com/nlnetlabs/the-peculiar-case-of-nsec-processing-using-expanded-wildcard-records-ae8285f236be
+https://datatracker.ietf.org/doc/html/rfc7129#section-5.3
+
+split PSL/TLD/whatever into a special/ dir?
+"maybe-zone" flag set to true for entries from domain lists, with some queries unsetting it after ascertaining whether or not it is a zone apex?
+PSL too
+
+what to do with blatantly incorrect NSEC ranges? e.g [www.example.com. .. dkim._domainkey.example.com.)
+example offenders: vian.ee, laurella.ee, (both use nameservers ns{1,2}.timeweb.ru, ns{3,4}.timeweb.org)
+
+add (more) indexes to DB?
+
+script with prewritten SQL expressions to e.g find domains with unregistered NS-es, CNAMEs in incorrect places, AXFRable NSes etc.
+
+move python/fetch_all.py here as well? (easier to parallelize)
+
+profile
+
+TLDs using root zone?
+
+CNAMEs on apex
+	subdomain takeover options caused by dangling CNAMEs
+dns dumpster? sublist3r?
+check Hardenize for RIA domains + domains project
+
+enumerate ip6.arpa nameserver and other .arpa enumeration?
+
+avoid retries on queries on e.g NXDOMAIN?
+
+fetch zone_walk_res to RRs
+
+TCP-responsive and UDP-responsive? only AXFR (TCP) needs direct access?
+
+don't bother with axfr with e.g cloudflare, aws, zone.ee, dnspod etc. (mark as unresponsive? seperate flag?)
+
+[NO-RISK]
+add more data to tables to e.g prevent zone refetches
+more data sources
+	just domains from domains project
+	just domains from old/outdated zone files (kp/ru/vn/by)
+add checks for active domains due to potentially outdated sources?
+
+domain availability check via Gandi API? https://api.gandi.net/docs/domains/
+filter out invalid domains (e.g IP addresses or monstrosities like ns1.185.194.124.200.); use PSL for this?
+
+[MEDIUM-RISK]
+figure out if unresponsive DNS server IPs are on "available" IPs?

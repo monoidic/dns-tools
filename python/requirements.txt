@@ -1,0 +1,6 @@
+dnspython
+requests
+pyasn
+beautifulsoup4
+lxml
+publicsuffix2

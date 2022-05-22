@@ -1,0 +1,15 @@
+venv
+conf.json
+tsig/*.tsig
+zones/*.zone
+zones/*.zone.gz
+lists/*.txt
+results
+*.sqlite3
+*.sqlite3-*
+dns-tools
+*.swp
+__pycache__
+*.svg
+*.dot
+*.pprof
