@@ -36,19 +36,17 @@ func performAxfr(msg dns.Msg, rrDataChan chan rrData, ns string) error {
 				continue
 			}
 
-			rrValue, ok := rrToString(rr)
-			if ok == false {
-				continue
-			}
-
+			normalizeRR(rr)
+			rrValue := rr.String()
 			header := rr.Header()
 
 			rrDataChan <- rrData{
-				zone:    zone,
-				rrValue: rrValue,
-				rrType:  dns.TypeToString[header.Rrtype],
-				rrName:  strings.ToLower(header.Name),
-				msgtype: rrDataRegular,
+				zone:     zone,
+				rrValue:  rrValue,
+				rrType:   dns.TypeToString[header.Rrtype],
+				rrName:   header.Name,
+				msgtype:  rrDataRegular,
+				selfZone: true,
 			}
 		}
 	}
@@ -80,6 +78,7 @@ func axfrWorker(zipChan chan zoneIP, rrDataChan chan rrData, readWg, wg *sync.Wa
 		ns := zip.ip.name
 		msg.Question[0].Name = zone
 
+	axfrRetryLoop:
 		for i := 0; i < RETRIES; i++ {
 			now := time.Now()
 			err := performAxfr(msg, rrDataChan, ns)
@@ -94,12 +93,12 @@ func axfrWorker(zipChan chan zoneIP, rrDataChan chan rrData, readWg, wg *sync.Wa
 				break
 			}
 
-			errStr := err.Error()
-			if errStr == "dns: bad xfr rcode: 1" || errStr == "dns: bad xfr rcode: 3" || errStr == "dns: bad xfr rcode: 4" || errStr == "dns: bad xfr rcode: 5" || errStr == "dns: bad xfr rcode: 9" || errStr == "dns: no SOA" {
-				break
+			switch errStr := err.Error(); errStr {
+			case "dns: bad xfr rcode: 1", "dns: bad xfr rcode: 3", "dns: bad xfr rcode: 4", "dns: bad xfr rcode: 5", "dns: no SOA":
+				break axfrRetryLoop
+			default:
+				// fmt.Printf("(ns=%s zone=%s) performAxfr: %T %s\n", ns, zone, err, errStr)
 			}
-
-			//fmt.Printf("(ns=%s zone=%s) performAxfr: %T %s\n", ns, zone, err, err)
 		}
 
 		rrDataChan <- rrData{
@@ -138,7 +137,6 @@ func publicAxfrMaster(db *sql.DB, zipChan chan zoneIP, readWg *sync.WaitGroup) {
 func axfrWhitelist(inChan, outChan chan zoneIP, wg *sync.WaitGroup) {
 	for zip := range inChan {
 		if AxfrWhitelistedZoneSet[zip.zone.name] || AxfrWhitelistedIPSet[zip.ip.name] {
-			fmt.Printf("skipping zone %s on nameserver %s\n", zip.zone.name, zip.ip.name)
 			wg.Done()
 		} else {
 			outChan <- zip

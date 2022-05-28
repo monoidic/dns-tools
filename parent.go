@@ -6,6 +6,8 @@ import (
 
 // modified from miekg/dns Split() to return strings and the root zone (".")
 func nameParents(name string) []string {
+	name = dns.Fqdn(name)
+
 	if name == "." {
 		return []string{}
 	}
@@ -13,7 +15,7 @@ func nameParents(name string) []string {
 	var idx []int
 	off := 0
 
-	for end := false; end == false; off, end = dns.NextLabel(name, off) {
+	for end := false; !end; off, end = dns.NextLabel(name, off) {
 		idx = append(idx, off)
 	}
 

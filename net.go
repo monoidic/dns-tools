@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
@@ -64,13 +65,6 @@ type zoneIP struct {
 	ip   fieldData
 }
 
-type resolveType uint8
-
-const (
-	resolveNS = iota
-	resolveAddr
-)
-
 type connCache struct {
 	// TODO merge conn and cookie caches into *ttlcache.Cache[string, hostInfo] ?
 	client         *dns.Client
@@ -96,6 +90,7 @@ func getConnCache() connCache {
 	tcpCacheF := connCacheLoader(client, "tcp")
 	tcpCache := ttlcache.New[string, *dns.Conn](ttlOption, tcpCacheF)
 	go tcpCache.Start()
+	tcpCache.OnEviction(connCacheEviction)
 	tcpCookieCache := getCookieCache(tcpCache, client)
 
 	var udpCacheF ttlcache.Option[string, *dns.Conn]
@@ -109,6 +104,7 @@ func getConnCache() connCache {
 		udpCache = ttlcache.New[string, *dns.Conn](ttlOption, udpCacheF)
 		udpCookieCache = getCookieCache(udpCache, client)
 		go udpCache.Start()
+		udpCache.OnEviction(connCacheEviction)
 	}
 
 	return connCache{
@@ -329,11 +325,12 @@ func fetchCookie(msg dns.Msg, oCookie *dns.EDNS0_COOKIE, client *dns.Client, con
 func cookieFromMsg(msg dns.Msg) string {
 	var optRR *dns.OPT
 
+cookieFromMsgLoop:
 	for _, rr := range msg.Extra {
 		switch rrT := rr.(type) {
 		case *dns.OPT:
 			optRR = rrT
-			break
+			break cookieFromMsgLoop
 		}
 	}
 
@@ -352,7 +349,7 @@ func cookieFromMsg(msg dns.Msg) string {
 	return ""
 }
 
-func connCacheEviction(_ ttlcache.EvictionReason, item *ttlcache.Item[string, *dns.Conn]) {
+func connCacheEviction(_ context.Context, _ ttlcache.EvictionReason, item *ttlcache.Item[string, *dns.Conn]) {
 	item.Value().Close()
 }
 

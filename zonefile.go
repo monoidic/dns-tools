@@ -32,27 +32,32 @@ func readZonefiles(zoneDataChan chan zoneData, rrDataChan chan rrData, wg *sync.
 			}
 		}
 
-		for rr, running := zp.Next(); running == true; rr, running = zp.Next() {
+		for rr, running := zp.Next(); running; rr, running = zp.Next() {
 			switch rr.(type) {
 			case *dns.NSEC, *dns.NSEC3, *dns.RRSIG:
 				continue
 			}
 
-			rrValue, ok := rrToString(rr)
-			if ok == false {
-				continue
-			}
+			normalizeRR(rr)
+
+			rrValue := rr.String()
 
 			header := rr.Header()
 
 			// fmt.Println("inserted rr")
-			rrDataChan <- rrData{
+			rrD := rrData{
 				zone:    zoneLower,
 				rrValue: rrValue,
 				rrType:  dns.TypeToString[header.Rrtype],
-				rrName:  strings.ToLower(header.Name),
+				rrName:  header.Name,
 				msgtype: rrDataRegular,
 			}
+
+			if tldZone {
+				rrD.parentZone = true
+			}
+
+			rrDataChan <- rrD
 		}
 
 		rrDataChan <- rrData{

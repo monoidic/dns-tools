@@ -47,7 +47,7 @@ func checkBlacklisted(mname, rname string) bool {
 		return true
 	}
 
-	for _, suffix := range []string{"ultradns.com."} {
+	for _, suffix := range mnameBlacklistSuffixes {
 		if strings.HasSuffix(mname, suffix) {
 			return true
 		}
@@ -103,7 +103,7 @@ func getNsecState(nsec3param string, nsecSigs []dns.NSEC, nsec3Sigs []*dns.NSEC3
 		}
 		if nsecT&hasNsec > 0 {
 			prefix = append(prefix, "nsec")
-			var builder []string
+			builder := make([]string, 0, len(nsecSigs))
 			for _, rr := range nsecSigs {
 				builder = append(builder, rr.Hdr.Name+"^"+rr.NextDomain)
 			}
@@ -111,13 +111,9 @@ func getNsecState(nsec3param string, nsecSigs []dns.NSEC, nsec3Sigs []*dns.NSEC3
 		}
 		if nsecT&hasNsec3 > 0 {
 			prefix = append(prefix, "nsec3")
-			var builder []string
+			builder := make([]string, 0, len(nsec3Sigs))
 			for _, rr := range nsec3Sigs {
-				s, ok := rrToString(rr)
-				if !ok {
-					panic(fmt.Sprintf("nsec3RR2: %#v", rr))
-				}
-				builder = append(builder, s)
+				builder = append(builder, rr.String())
 			}
 			suffix = append(suffix, strings.Join(builder, "|"))
 		}
@@ -179,7 +175,7 @@ nsec3paramLoop:
 		switch rrT := rr.(type) {
 		case *dns.NSEC3PARAM:
 			var ok bool
-			nsec3param, ok = rrToString(rrT)
+			nsec3param = rrT.String()
 			if !ok {
 				panic(fmt.Sprintf("nsec3paramLoop: %#v", rrT))
 			}

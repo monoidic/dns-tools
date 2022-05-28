@@ -21,19 +21,6 @@ type walkZone struct {
 	rrTypes         map[string][]string
 }
 
-type zwType int
-
-const (
-	zwRR zwType = iota
-	zwSubdomain
-)
-
-type zoneWalkRes struct {
-	resType zwType
-	s       string // rr_name or subdomain
-	rrType  int
-}
-
 func (wz *walkZone) contains(z string) bool {
 	l := len(wz.knownRanges)
 
@@ -146,29 +133,21 @@ func (wz *walkZone) addKnown(rr dns.NSEC) bool {
 		}
 	case -1: // end or outside
 		cmpEndIndexStart := Compare(end, indexStart)
-		switch Compare(start, prevEnd) {
-		case 0: // end
-			switch cmpEndIndexStart {
-			case 0: // merge
-				tmp := append(wz.knownRanges[:i-1], [2]string{prevStart, indexEnd})
-				wz.knownRanges = append(tmp, wz.knownRanges[i+1:]...)
-			case -1: // extend
-				wz.knownRanges[i-1][1] = end
-			default:
-				panic(fmt.Sprintf("unexpected value at start == prevEnd, start=%s end=%s indexStart=%s indexEnd=%s prevStart=%s prevEnd=%s", start, end, indexStart, indexEnd, prevStart, prevEnd))
-			}
-		case 1: // outside
-			switch cmpEndIndexStart {
-			case 0: // extend
-				wz.knownRanges[i][0] = start
-			case -1: // new
-				wz.knownRanges = append(wz.knownRanges[:i+1], wz.knownRanges[i:]...)
-				wz.knownRanges[i] = [2]string{start, end}
-			default:
-				panic(fmt.Sprintf("unexpected value at start < indexStart, %s _ %s _ %s _ %s", start, end, indexStart, indexEnd))
-			}
+		cmpStartPrevEnd := Compare(start, prevEnd)
+
+		switch switchKey := (cmpStartPrevEnd+1)*3 + (cmpEndIndexStart + 1); switchKey {
+		case (0+1)*3 + (0 + 1): // end, merge
+			tmp := append(wz.knownRanges[:i-1], [2]string{prevStart, indexEnd})
+			wz.knownRanges = append(tmp, wz.knownRanges[i+1:]...)
+		case (0+1)*3 + (-1 + 1): // end, extend
+			wz.knownRanges[i-1][1] = end
+		case (1+1)*3 + (0 + 1): // outside, extend
+			wz.knownRanges[i][0] = start
+		case (1+1)*3 + (-1 + 1): // outside, new
+			wz.knownRanges = append(wz.knownRanges[:i+1], wz.knownRanges[i:]...)
+			wz.knownRanges[i] = [2]string{start, end}
 		default:
-			panic(fmt.Sprintf("unexpected start < prevEnd, %s _ %s _ %s _ %s", start, end, indexStart, indexEnd))
+			panic(fmt.Sprintf("unexpected value, start=%s end=%s indexStart=%s indexEnd=%s prevStart=%s prevEnd=%s", start, end, indexStart, indexEnd, prevStart, prevEnd))
 		}
 	}
 
@@ -570,3 +549,5 @@ func dddToByte(s []byte) byte {
 	_ = s[2] // bounds check hint to compiler; see golang.org/issue/14808
 	return byte((s[0]-'0')*100 + (s[1]-'0')*10 + (s[2] - '0'))
 }
+
+func isDigit(b byte) bool { return b <= '9' && b >= '0' }
