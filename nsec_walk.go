@@ -123,6 +123,7 @@ func (wz *walkZone) addKnown(rr dns.NSEC) bool {
 		if Compare(end, indexEnd) == 1 {
 			panic(fmt.Sprintf("unexpected value at start == indexStart, %s _ %s _ %s _ %s", start, end, indexStart, indexEnd))
 		}
+
 	case 1: // middle
 		if Compare(start, indexEnd) == -1 { // middle
 			if Compare(end, indexEnd) == 1 {
@@ -131,19 +132,20 @@ func (wz *walkZone) addKnown(rr dns.NSEC) bool {
 		} else {
 			panic(fmt.Sprintf("unreachable, %s _ %s _ %s _ %s", start, end, indexStart, indexEnd))
 		}
+
 	case -1: // end or outside
 		cmpEndIndexStart := Compare(end, indexStart)
 		cmpStartPrevEnd := Compare(start, prevEnd)
 
-		switch switchKey := (cmpStartPrevEnd+1)*3 + (cmpEndIndexStart + 1); switchKey {
-		case (0+1)*3 + (0 + 1): // end, merge
+		switch switchKey := cmpStartPrevEnd*3 + cmpEndIndexStart; switchKey {
+		case 0*3 + 0: // end, merge
 			tmp := append(wz.knownRanges[:i-1], [2]string{prevStart, indexEnd})
 			wz.knownRanges = append(tmp, wz.knownRanges[i+1:]...)
-		case (0+1)*3 + (-1 + 1): // end, extend
+		case 0*3 + -1: // end, extend
 			wz.knownRanges[i-1][1] = end
-		case (1+1)*3 + (0 + 1): // outside, extend
+		case 1*3 + 0: // outside, extend
 			wz.knownRanges[i][0] = start
-		case (1+1)*3 + (-1 + 1): // outside, new
+		case 1*3 + -1: // outside, new
 			wz.knownRanges = append(wz.knownRanges[:i+1], wz.knownRanges[i:]...)
 			wz.knownRanges[i] = [2]string{start, end}
 		default:
@@ -304,7 +306,7 @@ func nsecWalkMaster(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
 	}
 	namesStmts := map[string]string{
 		"walkRes":    "INSERT OR IGNORE INTO zone_walk_res (zone_id, rr_name_id, rr_type_id) VALUES (?, ?, ?)",
-		"subdomain":  "INSERT OR IGNORE INTO zone_parent (child_id, parent_id) VALUES (?, ?)",
+		"subdomain":  "INSERT OR IGNORE INTO name_parent (child_id, parent_id) VALUES (?, ?)",
 		"setWalked":  "UPDATE name SET nsec_walked=TRUE WHERE id=?",
 		"nameToZone": "UPDATE name SET is_zone=TRUE WHERE id=?",
 	}
@@ -313,35 +315,29 @@ func nsecWalkMaster(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
 }
 
 func nsecWalkInsert(tableMap TableMap, stmtMap StmtMap, zw walkZone) {
-	var err error
 	zoneID := zw.id
 
 	for rrName, rrtL := range zw.rrTypes {
-		rrNameID := tableMap["rr_name"].get(rrName)
+		rrNameID := tableMap.get("rr_name", rrName)
 
 		for _, rrType := range rrtL {
 			if rrType == "NS" {
 				zw.subdomains[rrName] = true
 			}
 
-			rrTypeID := tableMap["rr_type"].get(rrType)
+			rrTypeID := tableMap.get("rr_type", rrType)
 
-			_, err = stmtMap["walkRes"].stmt.Exec(zoneID, rrNameID, rrTypeID)
-			check(err)
+			stmtMap.exec("walkRes", zoneID, rrNameID, rrTypeID)
 		}
 	}
 
 	for subdomain := range zw.subdomains {
-		childZoneID := tableMap["name"].get(subdomain)
-		_, err = stmtMap["nameToZone"].stmt.Exec(childZoneID)
-		check(err)
-
-		_, err = stmtMap["subdomain"].stmt.Exec(childZoneID, zoneID)
-		check(err)
+		childZoneID := tableMap.get("name", subdomain)
+		stmtMap.exec("nameToZone", childZoneID)
+		stmtMap.exec("subdomain", childZoneID, zoneID)
 	}
 
-	_, err = stmtMap["setWalked"].stmt.Exec(zoneID)
-	check(err)
+	stmtMap.exec("setWalked", zoneID)
 }
 
 func nsecWalk(db *sql.DB) {

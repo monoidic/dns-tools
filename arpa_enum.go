@@ -172,17 +172,13 @@ func inAddrWriter(db *sql.DB, zoneChan chan string, wg *sync.WaitGroup) {
 
 func inAddrWrite(tableMap TableMap, stmtMap StmtMap, iad inAddrData) {
 	if len(iad.NSes) > 0 {
-		zoneID := tableMap["name"].get(iad.zone)
-		_, err := stmtMap["nameToZone"].stmt.Exec(zoneID)
-		check(err)
+		zoneID := tableMap.get("name", iad.zone)
+		stmtMap.exec("nameToZone", zoneID)
 
 		for _, ns := range iad.NSes {
-			nsID := tableMap["name"].get(ns)
-			_, err = stmtMap["nameToNS"].stmt.Exec(nsID)
-			check(err)
-
-			_, err = stmtMap["insert"].stmt.Exec(zoneID, nsID)
-			check(err)
+			nsID := tableMap.get("name", ns)
+			stmtMap.exec("nameToNS", nsID)
+			stmtMap.exec("insert", zoneID, nsID)
 		}
 	}
 }

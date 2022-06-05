@@ -4,84 +4,14 @@ import (
 	"database/sql"
 	"fmt"
 	"github.com/miekg/dns"
-	"golang.org/x/net/publicsuffix"
 	"math/rand"
 	"sync"
 )
-
-type childParent struct {
-	child      string
-	childID    int64
-	parentZone string
-	success    bool
-}
 
 type regStatus struct {
 	zone       string
 	id         int64
 	registered bool
-}
-
-func parentMapper(nsChan chan fieldData, outChan chan childParent, wg *sync.WaitGroup, once *sync.Once) {
-	for nsd := range nsChan {
-		child := nsd.name
-		var dotless string
-		success := true
-
-		if child[len(child)-1] == '.' {
-			dotless = child[:len(child)-1]
-		} else {
-			dotless = child
-		}
-
-		parent, err := publicsuffix.EffectiveTLDPlusOne(dotless)
-
-		if err == nil {
-			parent += "."
-		} else {
-			fmt.Printf("name %s (%s): %s\n", dotless, child, err)
-			success = false
-		}
-
-		outChan <- childParent{child: child, childID: nsd.id, parentZone: parent, success: success}
-	}
-
-	wg.Done()
-	wg.Wait()
-	once.Do(func() { close(outChan) })
-}
-
-func childParentMap(db *sql.DB, nsChan chan fieldData, wg *sync.WaitGroup) {
-	tablesFields := map[string]string{
-		"name": "name",
-	}
-	namesStmts := map[string]string{
-		"insert":     "INSERT OR IGNORE INTO zone_parent (child_id, parent_id) VALUES (?, ?)",
-		"nameToZone": "UPDATE name SET is_zone=TRUE WHERE id=?",
-		"setMapped":  "UPDATE name SET parent_mapped=TRUE WHERE id=?",
-	}
-
-	netWriter(db, nsChan, wg, tablesFields, namesStmts, parentMapper, parentWrite)
-}
-
-func parentWrite(tableMap TableMap, stmtMap StmtMap, nsp childParent) {
-	var err error
-	if nsp.success {
-		parentID := tableMap["name"].get(nsp.parentZone)
-
-		_, err = stmtMap["nameToZone"].stmt.Exec(parentID)
-		check(err)
-
-		if parentID != nsp.childID {
-			_, err = stmtMap["insert"].stmt.Exec(nsp.childID, parentID)
-			check(err)
-		}
-	}
-
-	_, err = stmtMap["setMapped"].stmt.Exec(nsp.childID)
-	check(err)
-
-	// fmt.Printf("name %s has parent zone %s\n", nsp.name, nsp.parentZone)
 }
 
 func regMapper(zoneChan chan fieldData, outChan chan regStatus, wg *sync.WaitGroup, once *sync.Once) {
@@ -143,14 +73,38 @@ func detectUnregisteredDomains(db *sql.DB, zoneChan chan fieldData, wg *sync.Wai
 }
 
 func unregisteredWrite(tableMap TableMap, stmtMap StmtMap, reg regStatus) {
-	_, err := stmtMap["update"].stmt.Exec(reg.registered, reg.id)
+	stmtMap.exec("update", reg.registered, reg.id)
+}
+
+func getUnregisteredDomains(db *sql.DB) {
+	readerWriter("finding unregistered domains", db, getRegUncheckedZones, detectUnregisteredDomains)
+	propagateUnreg(db)
+}
+
+func propagateUnreg(db *sql.DB) {
+	tx, err := db.Begin()
 	check(err)
-}
 
-func getAddressDomain(db *sql.DB) {
-	readerWriter("mapping names to effective domains", db, getParentCheck, childParentMap)
-}
+	var numChanges int64 = 1
 
-func getUnregisteredParentDomains(db *sql.DB) {
-	readerWriter("finding unregistered NS address domains", db, getParentZones, detectUnregisteredDomains)
+	for numChanges != 0 {
+		_, err = tx.Exec(`
+			UPDATE name
+			SET registered=FALSE, reg_checked=TRUE
+			FROM zone_parent
+			INNER JOIN name AS child
+			ON zone_parent.child_id=child.id
+			INNER JOIN name AS parent
+			ON zone_parent.parent_id=parent.id
+			WHERE parent.registered=FALSE
+			AND name.id=child.id
+		`)
+		check(err)
+
+		rows, err := tx.Query("SELECT changes()")
+		check(err)
+		rows.Next()
+		rows.Scan(&numChanges)
+		check(rows.Close())
+	}
 }

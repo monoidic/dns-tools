@@ -7,6 +7,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"math/rand"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -15,6 +16,8 @@ const RETRIES = 5
 const TIMEOUT = 5 * time.Second
 const BUFLEN = 10_000
 const CHUNKSIZE = 100_000
+
+var NUMPROCS = runtime.GOMAXPROCS(0)
 
 var args []string
 var networksFile string
@@ -50,15 +53,15 @@ var flags = map[string]*flagData{
 	"nsec_map":     {description: "map nsec statuses of DNS zones on the internet", function: checkNsec},
 	"zone_walk":    {description: "perform zone walk on vulnerable zones", function: nsecWalk},
 	"axfr":         {description: "attempt axfr queries on all nameservers for each zone", function: publicAxfr},
-	"parent_map":   {description: "map names to their own parent domains", function: getAddressDomain},
+	"parent_map":   {description: "map names to their own parent domains", function: mapZoneParents},
 	"parent_ns":    {description: "fetch nameservers and glue A/AAAA records directly from a zone's parent zone", function: getParentNS},
-	"tld_map":      {description: "map names to TLDs and validate names", function: mapZoneTLDs},
-	"unregistered": {description: "check if domain appears in DNS", function: getUnregisteredParentDomains},
+	"unregistered": {description: "check if domain appears in DNS", function: getUnregisteredDomains},
 	"psl":          {description: "insert TLDs from PSL", function: insertPSL},
 	"rdns":         {description: "perform rDNS queries on all saved IP addresses", function: rdns},
+	"validate":     {description: "check if zones are valid", function: validateZones},
 }
 
-var flagOrder = []string{"parse", "parse_lists", "in_addr", "rr_ns", "rr_mx", "rr_ip", "net_ns", "net_mx", "net_ip", "rdns", "check_up", "nsec_map", "zone_walk", "axfr", "tld_map", "psl", "parent_map", "parent_ns", "unregistered"}
+var flagOrder = []string{"parse", "parse_lists", "in_addr", "rr_ns", "rr_mx", "rr_ip", "net_ns", "net_mx", "net_ip", "rdns", "check_up", "nsec_map", "zone_walk", "axfr", "psl", "parent_map", "parent_ns", "validate", "unregistered"}
 var publicDnsFlags = []string{"in_addr", "net_ns", "net_mx", "net_ip", "nsec_map", "zone_walk", "unregistered", "rdns"}
 var directConns = []string{"axfr", "check_up", "parent_ns"}
 

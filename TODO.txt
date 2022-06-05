@@ -1,6 +1,6 @@
-DNS cookies
+use UPSERT?
 
-recursive parent zone mapper (e.g maps "subdomain.parentdomain.tld." => "parentdomain.org." instead of "subdomain.parendomain.tld." => "tld." )
+add name_parent during zone file parsing + axfr?
 
 https://medium.com/nlnetlabs/the-peculiar-case-of-nsec-processing-using-expanded-wildcard-records-ae8285f236be
 https://datatracker.ietf.org/doc/html/rfc7129#section-5.3

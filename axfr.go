@@ -116,7 +116,7 @@ func axfrWorker(zipChan chan zoneIP, rrDataChan chan rrData, readWg, wg *sync.Wa
 }
 
 func publicAxfrMaster(db *sql.DB, zipChan chan zoneIP, readWg *sync.WaitGroup) {
-	numProcs := 64
+	numProcs := NUMPROCS
 
 	rrDataChan := make(chan rrData, BUFLEN)
 

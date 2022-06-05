@@ -18,7 +18,6 @@ var initStmts = []string{
 		is_ns         INTEGER NOT NULL DEFAULT FALSE,
 		is_mx         INTEGER NOT NULL DEFAULT FALSE,
 		is_zone       INTEGER NOT NULL DEFAULT FALSE,
-		is_tld        INTEGER NOT NULL DEFAULT FALSE,
 		is_rdns       INTEGER NOT NULL DEFAULT FALSE,
 		is_cname      INTEGER NOT NULL DEFAULT FALSE,
 		registered    INTEGER NOT NULL DEFAULT TRUE,
@@ -30,10 +29,9 @@ var initStmts = []string{
 		glue_ns       INTEGER NOT NULL DEFAULT FALSE, -- for zones; glue NS has been fetched from parent zone
 		addr_resolved INTEGER NOT NULL DEFAULT FALSE,
 		axfr_tried    INTEGER NOT NULL DEFAULT FALSE,
-		valid         INTEGER NOT NULL DEFAULT TRUE,  -- has valid TLD and/or parent zone
+		valid         INTEGER NOT NULL DEFAULT TRUE,  -- has valid parent zone chain/TLD
 		valid_tried   INTEGER NOT NULL DEFAULT FALSE, -- validation has been verified
 		parent_mapped INTEGER NOT NULL DEFAULT FALSE,
-		tld_mapped    INTEGER NOT NULL DEFAULT FALSE,
 		maybe_zone    INTEGER NOT NULL DEFAULT FALSE,
 		inserted      INTEGER NOT NULL DEFAULT FALSE
 	)
@@ -87,19 +85,11 @@ var initStmts = []string{
 	)
 	`,
 	`
-	CREATE TABLE IF NOT EXISTS zone_parent
+	CREATE TABLE IF NOT EXISTS name_parent
 	(
 		id          INTEGER PRIMARY KEY,
 		child_id    INTEGER UNIQUE NOT NULL REFERENCES name(id),
 		parent_id   INTEGER NOT NULL REFERENCES name(id)
-	)
-	`,
-	`
-	CREATE TABLE IF NOT EXISTS zone_tld
-	(
-		id      INTEGER PRIMARY KEY,
-		zone_id INTEGER UNIQUE NOT NULL REFERENCES name(id),
-		tld_id  INTEGER NOT NULL REFERENCES name(id)
 	)
 	`,
 	`
@@ -235,7 +225,6 @@ const (
 	rrDataZoneDone
 	rrDataZoneAxfrEnd
 	rrDataZoneAxfrTry
-	rrDataTLD
 )
 
 type rrData struct {
@@ -252,9 +241,19 @@ type rrData struct {
 	selfZone   bool
 }
 
-type StmtMap map[string]*stmtData
+type StmtMap struct {
+	data map[string]*stmtData
+	mx   *sync.RWMutex
+	once *sync.Once
+	wg   *sync.WaitGroup
+}
 
-type TableMap map[string]*tableData
+type TableMap struct {
+	data map[string]*tableData
+	mx   *sync.RWMutex
+	once *sync.Once
+	wg   *sync.WaitGroup
+}
 
 type FDCache struct {
 	cache   *ttlcache.Cache[string, []fieldData]
@@ -342,18 +341,6 @@ func (fdc *FDCache) getName(zone string) []string {
 	return names
 }
 
-func (td *tableData) get(key string) int64 {
-	return td.cache.Get(key, td.loader).Value()
-}
-
-func (td *tableData) roGet(key string) int64 {
-	item := td.cache.Get(key, td.roLoader)
-	if item == nil {
-		return 0
-	}
-	return item.Value()
-}
-
 func getTableMap(m map[string]string, tx *sql.Tx) TableMap {
 	tableMap := make(map[string]*tableData)
 
@@ -381,22 +368,67 @@ func getTableMap(m map[string]string, tx *sql.Tx) TableMap {
 		}
 	}
 
-	return tableMap
+	return TableMap{
+		data: tableMap,
+		mx:   new(sync.RWMutex),
+		once: new(sync.Once),
+		wg:   new(sync.WaitGroup),
+	}
 }
 
 func (tableMap TableMap) update(tx *sql.Tx) {
-	for tableName, td := range tableMap {
+	// needs lock to be locked externally
+
+	for tableName, td := range tableMap.data {
 		td.cleanup()
-		td.loader, td.cleanup = createInsertF(tx, tableName, td.fieldName)
+		var rwCleanup, roCleanup func()
+		td.loader, rwCleanup = createInsertF(tx, tableName, td.fieldName)
+		td.roLoader, roCleanup = createROGetF(tx, tableName, td.fieldName)
+		td.cleanup = func() {
+			rwCleanup()
+			roCleanup()
+		}
 	}
 }
 
-func (tableMap TableMap) clear() {
-	for _, td := range tableMap {
-		td.cleanup()
-		td.cache.Stop()
-		td.cache.DeleteAll()
+func (tableMap TableMap) get(table, key string) int64 {
+	tableMap.mx.RLock()
+
+	td := tableMap.data[table]
+	ret := td.cache.Get(key, td.loader).Value()
+
+	tableMap.mx.RUnlock()
+
+	return ret
+}
+
+func (tableMap TableMap) roGet(table, key string) int64 {
+	var ret int64
+
+	tableMap.mx.RLock()
+
+	td := tableMap.data[table]
+	item := td.cache.Get(key, td.roLoader)
+	if item != nil {
+		ret = item.Value()
 	}
+
+	tableMap.mx.RUnlock()
+
+	return ret
+}
+
+func (tableMap TableMap) clear() {
+	tableMap.wg.Wait()
+	tableMap.mx.Lock()
+	tableMap.once.Do(func() {
+		for _, td := range tableMap.data {
+			td.cleanup()
+			td.cache.Stop()
+			td.cache.DeleteAll()
+		}
+	})
+	// tableMap.mx.Unlock()
 }
 
 func getStmtMap(m map[string]string, tx *sql.Tx) StmtMap {
@@ -408,22 +440,43 @@ func getStmtMap(m map[string]string, tx *sql.Tx) StmtMap {
 		stmtMap[name] = &stmtData{stmt: stmt, query: query}
 	}
 
-	return stmtMap
+	return StmtMap{
+		data: stmtMap,
+		mx:   new(sync.RWMutex),
+		once: new(sync.Once),
+		wg:   new(sync.WaitGroup),
+	}
 }
 
 func (stmtMap StmtMap) update(tx *sql.Tx) {
-	for _, std := range stmtMap {
+	// needs lock to be locked externally
+	var err error
+
+	for _, std := range stmtMap.data {
 		check(std.stmt.Close())
-		stmt, err := tx.Prepare(std.query)
+		std.stmt, err = tx.Prepare(std.query)
 		check(err)
-		std.stmt = stmt
 	}
 }
 
+func (stmtMap StmtMap) exec(table string, args ...any) {
+	stmtMap.mx.RLock()
+
+	_, err := stmtMap.data[table].stmt.Exec(args...)
+	check(err)
+
+	stmtMap.mx.RUnlock()
+}
+
 func (stmtMap StmtMap) clear() {
-	for _, std := range stmtMap {
-		check(std.stmt.Close())
-	}
+	stmtMap.wg.Wait()
+	stmtMap.mx.Lock()
+	stmtMap.once.Do(func() {
+		for _, std := range stmtMap.data {
+			check(std.stmt.Close())
+		}
+	})
+	// stmtMap.mx.Unlock()
 }
 
 func createInsertF(tx *sql.Tx, tableName string, valueName string) (ttlcache.Option[string, int64], func()) {
@@ -496,7 +549,6 @@ func insertRRWorker(db *sql.DB, rrDataChan chan rrData, wg *sync.WaitGroup) {
 	namesStmts := map[string]string{
 		"insert":           "INSERT OR IGNORE INTO zone2rr (zone_id, rr_type_id, rr_name_id, rr_value_id) VALUES (?, ?, ?, ?)",
 		"update":           "UPDATE name SET inserted=TRUE, is_zone=TRUE WHERE id=?",
-		"tld":              "UPDATE name SET is_tld=TRUE, is_zone=TRUE WHERE id=?",
 		"vulnNS":           "INSERT OR IGNORE INTO axfrable_ns (ip_id, zone_id) VALUES (?, ?)",
 		"vulnTime":         "UPDATE axfrable_ns SET scan_time=? WHERE ip_id=? AND zone_id=?",
 		"axfrTried":        "UPDATE name SET axfr_tried=TRUE WHERE id=?",
@@ -515,60 +567,51 @@ func insertRRWorker(db *sql.DB, rrDataChan chan rrData, wg *sync.WaitGroup) {
 		if i == 0 {
 			i = CHUNKSIZE
 
+			tableMap.mx.Lock()
+			stmtMap.mx.Lock()
+
 			check(tx.Commit())
 			tx, err = db.Begin()
 			check(err)
 
 			tableMap.update(tx)
 			stmtMap.update(tx)
+
+			tableMap.mx.Unlock()
+			stmtMap.mx.Unlock()
 		}
 		i--
 
 		switch rrD.msgtype {
 		case rrDataRegular:
-			zoneID := tableMap["name"].get(rrD.zone)
-			rrTypeID := tableMap["rr_type"].get(rrD.rrType)
-			rrNameID := tableMap["rr_name"].get(rrD.rrName)
-			rrValueID := tableMap["rr_value"].get(rrD.rrValue)
+			zoneID := tableMap.get("name", rrD.zone)
+			rrTypeID := tableMap.get("rr_type", rrD.rrType)
+			rrNameID := tableMap.get("rr_name", rrD.rrName)
+			rrValueID := tableMap.get("rr_value", rrD.rrValue)
 
-			_, err = stmtMap["insert"].stmt.Exec(zoneID, rrTypeID, rrNameID, rrValueID)
-			check(err)
+			stmtMap.exec("insert", zoneID, rrTypeID, rrNameID, rrValueID)
 
 			if rrD.selfZone || rrD.parentZone {
-				_, err = stmtMap["self_parent_zone"].stmt.Exec(rrD.selfZone, rrD.parentZone, zoneID, rrTypeID, rrNameID, rrValueID)
-				check(err)
+				stmtMap.exec("self_parent_zone", rrD.selfZone, rrD.parentZone, zoneID, rrTypeID, rrNameID, rrValueID)
 			}
 
 		case rrDataZoneDone:
-			zoneID := tableMap["name"].get(rrD.zone)
+			zoneID := tableMap.get("name", rrD.zone)
 
-			_, err = stmtMap["update"].stmt.Exec(zoneID)
-			check(err)
+			stmtMap.exec("update", zoneID)
 
 		case rrDataZoneAxfrEnd:
-			ipID := tableMap["ip"].get(rrD.ip)
-			zoneID := tableMap["name"].get(rrD.zone)
+			ipID := tableMap.get("ip", rrD.ip)
+			zoneID := tableMap.get("name", rrD.zone)
 
-			_, err = stmtMap["vulnNS"].stmt.Exec(ipID, zoneID)
-			check(err)
-
-			_, err = stmtMap["vulnTime"].stmt.Exec(rrD.scanned, ipID, zoneID)
-			check(err)
-
-			_, err = stmtMap["update"].stmt.Exec(zoneID)
-			check(err)
+			stmtMap.exec("vulnNS", ipID, zoneID)
+			stmtMap.exec("vulnTime", rrD.scanned, ipID, zoneID)
+			stmtMap.exec("update", zoneID)
 
 		case rrDataZoneAxfrTry:
-			zoneID := tableMap["name"].get(rrD.zone)
+			zoneID := tableMap.get("name", rrD.zone)
 
-			_, err = stmtMap["axfrTried"].stmt.Exec(zoneID)
-			check(err)
-
-		case rrDataTLD:
-			zoneID := tableMap["name"].get(rrD.zone)
-
-			_, err = stmtMap["tld"].stmt.Exec(zoneID)
-			check(err)
+			stmtMap.exec("axfrTried", zoneID)
 		}
 	}
 
@@ -628,17 +671,12 @@ func mxRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
 
 	mxRR := rr.(*dns.MX)
 
-	nameID := tableMap["name"].get(ad.rrName.name)
-	mxID := tableMap["name"].get(mxRR.Mx)
+	nameID := tableMap.get("name", ad.rrName.name)
+	mxID := tableMap.get("name", mxRR.Mx)
 
-	_, err = stmtMap["set_mx"].stmt.Exec(mxID)
-	check(err)
-
-	_, err = stmtMap["name_mx"].stmt.Exec(nameID, mxID, mxRR.Preference)
-	check(err)
-
-	_, err = stmtMap["parsed"].stmt.Exec(ad.id)
-	check(err)
+	stmtMap.exec("set_mx", mxID)
+	stmtMap.exec("name_mx", nameID, mxID, mxRR.Preference)
+	stmtMap.exec("parsed", ad.id)
 }
 
 func ipRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
@@ -655,19 +693,16 @@ func ipRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
 		panic(fmt.Sprintf("invalid IP type: %T\n", rr))
 	}
 
-	nameID := tableMap["name"].get(ad.rrName.name)
-	ipID := tableMap["ip"].get(ip)
+	nameID := tableMap.get("name", ad.rrName.name)
+	ipID := tableMap.get("ip", ip)
 
-	_, err = stmtMap["name_ip"].stmt.Exec(nameID, ipID)
-	check(err)
+	stmtMap.exec("name_ip", nameID, ipID)
 
 	if ad.fromParent || ad.fromSelf {
-		_, err = stmtMap["parent_self_zone"].stmt.Exec(ad.fromParent, ad.fromSelf, nameID, ipID)
-		check(err)
+		stmtMap.exec("parent_self_zone", ad.fromParent, ad.fromSelf, nameID, ipID)
 	}
 
-	_, err = stmtMap["parsed"].stmt.Exec(ad.id)
-	check(err)
+	stmtMap.exec("parsed", ad.id)
 }
 
 func nsRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
@@ -675,30 +710,22 @@ func nsRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
 	check(err)
 	nsRR := rr.(*dns.NS)
 
-	zoneID := tableMap["name"].get(ad.rrName.name)
-	nsID := tableMap["name"].get(nsRR.Ns)
+	zoneID := tableMap.get("name", ad.rrName.name)
+	nsID := tableMap.get("name", nsRR.Ns)
 
-	_, err = stmtMap["set_zone"].stmt.Exec(zoneID)
-	check(err)
-
-	_, err = stmtMap["set_ns"].stmt.Exec(nsID)
-	check(err)
-
-	_, err = stmtMap["insert"].stmt.Exec(zoneID, nsID)
-	check(err)
+	stmtMap.exec("set_zone", zoneID)
+	stmtMap.exec("set_ns", nsID)
+	stmtMap.exec("insert", zoneID, nsID)
 
 	if ad.fromParent || ad.fromSelf {
-		_, err = stmtMap["set_parent_self"].stmt.Exec(ad.fromParent, ad.fromSelf, zoneID, nsID)
-		check(err)
+		stmtMap.exec("set_parent_self", ad.fromParent, ad.fromSelf, zoneID, nsID)
 
 		if ad.fromParent {
-			_, err = stmtMap["set_glue"].stmt.Exec(zoneID)
-			check(err)
+			stmtMap.exec("set_glue", zoneID)
 		}
 	}
 
-	_, err = stmtMap["parsed"].stmt.Exec(ad.id)
-	check(err)
+	stmtMap.exec("parsed", ad.id)
 }
 
 func insertRR[rrType any](db *sql.DB, rrChan chan rrType, wg *sync.WaitGroup, tablesFields, namesStmts map[string]string, rrF func(tableMap TableMap, stmtMap StmtMap, rrD rrType)) {
@@ -714,12 +741,18 @@ func insertRR[rrType any](db *sql.DB, rrChan chan rrType, wg *sync.WaitGroup, ta
 		if i == 0 {
 			i = CHUNKSIZE
 
+			tableMap.mx.Lock()
+			stmtMap.mx.Lock()
+
 			check(tx.Commit())
 			tx, err = db.Begin()
 			check(err)
 
 			tableMap.update(tx)
 			stmtMap.update(tx)
+
+			tableMap.mx.Unlock()
+			stmtMap.mx.Unlock()
 		}
 		i--
 
@@ -745,31 +778,30 @@ func getWalkableZones(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
 	`, db, zoneChan, wg)
 }
 
-func getParentCheck(db *sql.DB, nameChan chan fieldData, wg *sync.WaitGroup) {
+func getParentCheck(db *sql.DB, dataChan chan fieldData, wg *sync.WaitGroup) {
 	getDbFieldData(`
 		SELECT name, id
 		FROM name
 		WHERE
 		parent_mapped=FALSE
 		AND valid=TRUE
-	`, db, nameChan, wg)
+	`, db, dataChan, wg)
 }
 
-func getTLDMapZones(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
+func getRegUncheckedZones(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
 	getDbFieldData(`
-		SELECt name, id
+		SELECT name, id
 		FROM name
-		WHERE tld_mapped=FALSE
+		WHERE reg_checked=FALSE
+		AND is_zone=TRUE
 	`, db, zoneChan, wg)
 }
 
-func getParentZones(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
+func getValidUncheckedNames(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
 	getDbFieldData(`
-		SELECT DISTINCT zone.name, zone.id
+		SELECT name, id
 		FROM name AS zone
-		LEFT JOIN zone_parent ON zone_parent.parent_id = zone.id
-		WHERE zone.reg_checked=FALSE
-		AND ((zone_parent.id IS NOT NULL) OR (zone.is_ns=TRUE))
+		WHERE valid_tried=FALSE
 	`, db, zoneChan, wg)
 }
 

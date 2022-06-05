@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"os"
 	"regexp"
-	"runtime"
 	"strings"
 	"sync"
 )
@@ -25,13 +24,6 @@ func readZonefiles(zoneDataChan chan zoneData, rrDataChan chan rrData, wg *sync.
 		zp := dns.NewZoneParser(fp, zoneName, filename)
 		zoneLower := strings.ToLower(zoneName)
 
-		if tldZone {
-			rrDataChan <- rrData{
-				zone:    zoneLower,
-				msgtype: rrDataTLD,
-			}
-		}
-
 		for rr, running := zp.Next(); running; rr, running = zp.Next() {
 			switch rr.(type) {
 			case *dns.NSEC, *dns.NSEC3, *dns.RRSIG:
@@ -44,7 +36,7 @@ func readZonefiles(zoneDataChan chan zoneData, rrDataChan chan rrData, wg *sync.
 
 			header := rr.Header()
 
-			// fmt.Println("inserted rr")
+			// fmt.Printf("inserted %s\n", rrValue)
 			rrD := rrData{
 				zone:    zoneLower,
 				rrValue: rrValue,
@@ -89,7 +81,7 @@ func parseZoneFiles(db *sql.DB) {
 	go insertRRWorker(db, rrDataChan, &wg)
 
 	wg.Add(len(matches))
-	numProcs := runtime.GOMAXPROCS(0)
+	numProcs := NUMPROCS
 
 	for i := 0; i < numProcs; i++ {
 		go readZonefiles(zoneDataChan, rrDataChan, &wg)

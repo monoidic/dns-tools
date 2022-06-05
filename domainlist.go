@@ -6,7 +6,6 @@ import (
 	"github.com/miekg/dns"
 	"io/fs"
 	"os"
-	"runtime"
 	"strings"
 	"sync"
 )
@@ -49,12 +48,18 @@ func insertDomainWorker(db *sql.DB, domainChan chan string, wg *sync.WaitGroup) 
 		if i == 0 {
 			i = CHUNKSIZE
 
+			tableMap.mx.Lock()
+			stmtMap.mx.Lock()
+
 			check(tx.Commit())
 			tx, err = db.Begin()
 			check(err)
 
 			tableMap.update(tx)
 			stmtMap.update(tx)
+
+			tableMap.mx.Unlock()
+			stmtMap.mx.Unlock()
 		}
 		i--
 
@@ -68,10 +73,9 @@ func insertDomainWorker(db *sql.DB, domainChan chan string, wg *sync.WaitGroup) 
 }
 
 func domainInsert(tableMap TableMap, stmtMap StmtMap, domain string) {
-	nameID := tableMap["name"].get(domain)
+	nameID := tableMap.get("name", domain)
 
-	_, err := stmtMap["domain"].stmt.Exec(nameID)
-	check(err)
+	stmtMap.exec("domain", nameID)
 }
 
 func parseDomainLists(db *sql.DB) {
@@ -93,7 +97,7 @@ func parseDomainLists(db *sql.DB) {
 
 	wg.Add(len(matches))
 
-	numProcs := runtime.GOMAXPROCS(0)
+	numProcs := NUMPROCS
 
 	for i := 0; i < numProcs; i++ {
 		go readDomainLists(fileChan, domainChan, &wg)

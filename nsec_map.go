@@ -272,21 +272,18 @@ func checkNsecMaster(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
 }
 
 func checkNsecInsert(tableMap TableMap, stmtMap StmtMap, fd fdResults) {
-	var err error
 	zoneID := fd.id
 
 	if len(fd.results) != 0 { // fetch failure
-		nsecStateID := tableMap["nsec_state"].get(fd.results[0])
-		rnameID := tableMap["rname"].get(fd.results[1])
-		mnameID := tableMap["mname"].get(fd.results[2])
+		nsecStateID := tableMap.get("nsec_state", fd.results[0])
+		rnameID := tableMap.get("rname", fd.results[1])
+		mnameID := tableMap.get("mname", fd.results[2])
 		nsecS := fd.results[3]
 
-		_, err = stmtMap["insert"].stmt.Exec(zoneID, nsecStateID, rnameID, mnameID, nsecS)
-		check(err)
+		stmtMap.exec("insert", zoneID, nsecStateID, rnameID, mnameID, nsecS)
 	}
 
-	_, err = stmtMap["update"].stmt.Exec(zoneID)
-	check(err)
+	stmtMap.exec("update", zoneID)
 }
 
 func checkNsec(db *sql.DB) {
