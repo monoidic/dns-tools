@@ -91,11 +91,11 @@ func propagateUnreg(db *sql.DB) {
 		_, err = tx.Exec(`
 			UPDATE name
 			SET registered=FALSE, reg_checked=TRUE
-			FROM zone_parent
+			FROM name_parent
 			INNER JOIN name AS child
-			ON zone_parent.child_id=child.id
+			ON name_parent.child_id=child.id
 			INNER JOIN name AS parent
-			ON zone_parent.parent_id=parent.id
+			ON name_parent.parent_id=parent.id
 			WHERE parent.registered=FALSE
 			AND name.id=child.id
 		`)
