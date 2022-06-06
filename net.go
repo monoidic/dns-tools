@@ -778,7 +778,7 @@ func parentNsResolve(connCache connCache, msg dns.Msg, fdr fdResults) parentNSRe
 }
 
 func netWriterTable[inType any, resultType any](db *sql.DB, inChan chan inType, wg *sync.WaitGroup, tablesFields, namesStmts map[string]string, workerF func(inChan chan inType, outChan chan resultType, wg *sync.WaitGroup, tableMap TableMap, stmtMap StmtMap, once *sync.Once), insertF func(tableMap TableMap, stmtMap StmtMap, datum resultType)) {
-	numProcs := NUMPROCS
+	numProcs := 64
 
 	dataOutChan := make(chan resultType, BUFLEN)
 
