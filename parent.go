@@ -7,9 +7,11 @@ import (
 )
 
 type childParent struct {
-	child    fieldData
-	parent   fieldData
-	resolved bool
+	child       fieldData
+	parent      fieldData
+	parentGuess string
+	resolved    bool
+	registered  bool
 }
 
 // modified from miekg/dns Split() to return strings and the root zone (".")
@@ -48,6 +50,7 @@ func parentCheck(db *sql.DB, inChan chan fieldData, wg *sync.WaitGroup) {
 
 	namesStmts := map[string]string{
 		"set_zone":    "UPDATE name SET is_zone=TRUE WHERE id=?",
+		"set_unreg":   "UPDATE name SET reg_checked=TRUE, registered=FALSE WHERE id=?",
 		"mapped":      "UPDATE name SET parent_mapped=TRUE WHERE id=?",
 		"name_parent": "INSERT OR IGNORE INTO name_parent (child_id, parent_id) VALUES (?, ?)",
 	}
@@ -63,7 +66,7 @@ func addChildParent(inChan chan fieldData, outChan chan childParent) {
 		cp := childParent{child: fd}
 
 		if parents := nameParents(fd.name); len(parents) > 0 {
-			cp.parent.name = parents[0]
+			cp.parentGuess = parents[0]
 		}
 
 		outChan <- cp
@@ -72,14 +75,21 @@ func addChildParent(inChan chan fieldData, outChan chan childParent) {
 }
 
 func parentCheckWriter(tableMap TableMap, stmtMap StmtMap, res childParent) {
-	if res.resolved && res.parent.name != "" {
+	if res.resolved && res.parentGuess != "" {
 		parentID := res.parent.id
-		if parentID == 0 {
-			parentID = tableMap.get("name", res.parent.name)
+
+		if res.registered {
+			if parentID == 0 {
+				parentID = tableMap.get("name", res.parent.name)
+			}
+		} else {
+			parentID = tableMap.get("name", res.parentGuess)
+			stmtMap.exec("set_unreg", parentID)
 		}
 
 		stmtMap.exec("set_zone", parentID)
 		stmtMap.exec("name_parent", res.child.id, parentID)
+
 	}
 
 	stmtMap.exec("mapped", res.child.id)

@@ -61,7 +61,7 @@ var flags = map[string]*flagData{
 	"validate":     {description: "check if zones are valid", function: validateZones},
 }
 
-var flagOrder = []string{"parse", "parse_lists", "in_addr", "rr_ns", "rr_mx", "rr_ip", "net_ns", "net_mx", "net_ip", "rdns", "check_up", "nsec_map", "zone_walk", "axfr", "psl", "parent_map", "parent_ns", "validate", "unregistered"}
+var flagOrder = []string{"parse", "parse_lists", "in_addr", "rr_ns", "rr_mx", "rr_ip", "net_ns", "net_mx", "net_ip", "rdns", "check_up", "nsec_map", "zone_walk", "axfr", "psl", "validate", "parent_map", "parent_ns", "unregistered"}
 var publicDnsFlags = []string{"in_addr", "net_ns", "net_mx", "net_ip", "nsec_map", "zone_walk", "unregistered", "rdns"}
 var directConns = []string{"axfr", "check_up", "parent_ns"}
 

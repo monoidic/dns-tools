@@ -632,6 +632,7 @@ func insertNSRR(db *sql.DB, rrChan chan rrDBData, wg *sync.WaitGroup) {
 		"set_ns":          "UPDATE name SET is_ns=TRUE WHERE id=?",
 		"set_parent_self": "UPDATE zone_ns SET in_parent_zone=in_parent_zone|?, in_self_zone=in_self_zone|? WHERE zone_id=? AND ns_id=?",
 		"set_glue":        "UPDATE name SET glue_ns=TRUE WHERE id=?",
+		"set_checked":     "UPDATE name SET reg_checked=TRUE WHERE id=?",
 		"parsed":          "UPDATE zone2rr SET parsed=TRUE WHERE id=?",
 	}
 
@@ -721,7 +722,9 @@ func nsRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
 		stmtMap.exec("set_parent_self", ad.fromParent, ad.fromSelf, zoneID, nsID)
 
 		if ad.fromParent {
+			parentID := tableMap.get("name", nsRR.Hdr.Name)
 			stmtMap.exec("set_glue", zoneID)
+			stmtMap.exec("set_checked", parentID)
 		}
 	}
 
@@ -794,6 +797,7 @@ func getRegUncheckedZones(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGrou
 		FROM name
 		WHERE reg_checked=FALSE
 		AND is_zone=TRUE
+		AND valid=TRUE
 	`, db, zoneChan, wg)
 }
 

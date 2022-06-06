@@ -92,11 +92,10 @@ func propagateUnreg(db *sql.DB) {
 			UPDATE name
 			SET registered=FALSE, reg_checked=TRUE
 			FROM name_parent
-			INNER JOIN name AS child
-			ON name_parent.child_id=child.id
-			INNER JOIN name AS parent
-			ON name_parent.parent_id=parent.id
+			INNER JOIN name AS child ON name_parent.child_id=child.id
+			INNER JOIN name AS parent ON name_parent.parent_id=parent.id
 			WHERE parent.registered=FALSE
+			AND child.registered=TRUE
 			AND name.id=child.id
 		`)
 		check(err)
@@ -107,4 +106,6 @@ func propagateUnreg(db *sql.DB) {
 		rows.Scan(&numChanges)
 		check(rows.Close())
 	}
+
+	check(tx.Commit())
 }

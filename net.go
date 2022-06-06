@@ -490,10 +490,12 @@ func parentCheckWorker(inChan, outChan chan childParent, wg *sync.WaitGroup, tab
 func parentCheckFilter(inChan, workerInChan chan childParent, tableMap TableMap, stmtMap StmtMap) {
 	tableMap.wg.Add(1)
 	for cp := range inChan {
-		if cp.parent.name == "" {
+		if cp.parentGuess == "" {
 			cp.resolved = true
-		} else if parentID := tableMap.roGet("name", cp.parent.name); parentID != 0 {
+		} else if parentID := tableMap.roGet("name", cp.parentGuess); parentID != 0 {
 			cp.resolved = true
+			cp.registered = true
+			cp.parent.name = cp.parentGuess
 			cp.parent.id = parentID
 		}
 		workerInChan <- cp
@@ -650,7 +652,7 @@ func parentCheckResolve(connCache connCache, msg dns.Msg, cp childParent) childP
 		return cp
 	}
 
-	msg.Question[0].Name = cp.parent.name
+	msg.Question[0].Name = cp.parentGuess
 	var res *dns.Msg
 	var err error
 
@@ -684,6 +686,7 @@ parentCheckSOALoop:
 		realParent := strings.ToLower(soa.Hdr.Name)
 		cp.parent.name = realParent
 		cp.resolved = true
+		cp.registered = res.Rcode != dns.RcodeNameError
 	}
 
 	return cp
