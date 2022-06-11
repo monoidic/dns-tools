@@ -15,8 +15,9 @@ import (
 )
 
 type mxData struct {
-	data   []mxDatum
-	zoneID int64
+	data       []mxDatum
+	zoneID     int64
+	registered bool
 }
 
 type mxDatum struct {
@@ -36,7 +37,8 @@ type fdResults struct {
 
 type addrData struct {
 	fdResults
-	cnames []cnameEntry
+	cnames     []cnameEntry
+	registered bool
 }
 
 type cnameEntry struct {
@@ -55,9 +57,10 @@ type inAddrData struct {
 }
 
 type checkUpData struct {
-	ns, zone string
-	ipID     int64
-	success  bool
+	ns, zone   string
+	ipID       int64
+	success    bool
+	registered bool
 }
 
 type zoneIP struct {
@@ -124,94 +127,60 @@ func getCookieCache(protoCache *ttlcache.Cache[string, *dns.Conn], client *dns.C
 	return cache
 }
 
-func (c connCache) getUDP(hostname string) *dns.Conn {
-	item := c.udpCache.Get(hostname)
-	if item == nil {
-		return nil
+func getNull[T any](cache *ttlcache.Cache[string, T], key string) T {
+	var value T
+	item := cache.Get(key)
+	if item != nil {
+		value = item.Value()
 	}
+	return value
+}
 
-	return item.Value()
+func (c connCache) getUDP(hostname string) *dns.Conn {
+	return getNull(c.udpCache, hostname)
 }
 
 func (c connCache) getTCP(hostname string) *dns.Conn {
-	item := c.tcpCache.Get(hostname)
-	if item == nil {
-		return nil
-	}
-
-	return item.Value()
+	return getNull(c.tcpCache, hostname)
 }
 
 func (c connCache) getUDPCookie(hostname string) string {
-	item := c.udpCookieCache.Get(hostname)
-	if item == nil {
-		return ""
-	}
-
-	return item.Value()
+	return getNull(c.udpCookieCache, hostname)
 }
 
 func (c connCache) getTCPCookie(hostname string) string {
-	item := c.tcpCookieCache.Get(hostname)
-	if item == nil {
-		return ""
-	}
-
-	return item.Value()
+	return getNull(c.tcpCookieCache, hostname)
 }
 
-func (c connCache) udpExchange(hostname string, msg dns.Msg) (*dns.Msg, error) {
+func exchange(hostname string, msg dns.Msg, cookieCache *ttlcache.Cache[string, string], connCache *ttlcache.Cache[string, *dns.Conn], client *dns.Client) (*dns.Msg, error) {
 	msg.Id = dns.Id()
 
-	if cookie := c.getUDPCookie(hostname); cookie != "" {
+	if cookie := getNull(cookieCache, hostname); cookie != "" {
 		oCookie := msgAddCookie(&msg)
 		oCookie.Cookie = cookie
 	}
 
-	conn := c.getUDP(hostname)
+	conn := getNull(connCache, hostname)
 	if conn == nil {
 		return nil, Error{s: "could not connect to host"}
 	}
 
-	res, _, err := c.client.ExchangeWithConn(&msg, conn)
+	res, _, err := client.ExchangeWithConn(&msg, conn)
 	if err != nil {
-		c.udpCache.Delete(hostname)
+		connCache.Delete(hostname)
 	} else if cookie := cookieFromMsg(*res); cookie != "" {
-		c.udpCookieCache.Set(hostname, cookie, ttlcache.DefaultTTL)
+		cookieCache.Set(hostname, cookie, ttlcache.DefaultTTL)
 	}
 
 	return res, err
 }
 
 func (c connCache) tcpExchange(hostname string, msg dns.Msg) (*dns.Msg, error) {
-	msg.Id = dns.Id()
+	return exchange(hostname, msg, c.tcpCookieCache, c.tcpCache, c.client)
+}
 
-	if cookie := c.getTCPCookie(hostname); cookie != "" {
-		oCookie := msgAddCookie(&msg)
-		oCookie.Cookie = cookie
-	}
-
-	conn := c.getTCP(hostname)
-	if conn == nil {
-		return nil, Error{s: "could not connect to host"}
-	}
-
-	res, _, err := c.client.ExchangeWithConn(&msg, conn)
-	if err != nil {
-		c.tcpCache.Delete(hostname)
-		return nil, err
-	}
-
-	if res.Id != msg.Id { // ID mismatch, invalid response
-		// fmt.Printf("ID mismatch for %s from %s\n", msg.Question[0].Name, hostname)
-		return nil, &Error{s: "ID mismatch"}
-	}
-
-	if cookie := cookieFromMsg(*res); cookie != "" {
-		c.tcpCookieCache.Set(hostname, cookie, ttlcache.DefaultTTL)
-	}
-
-	return res, nil
+func (c connCache) udpExchange(hostname string, msg dns.Msg) (*dns.Msg, error) {
+	return exchange(hostname, msg, c.udpCookieCache, c.udpCache, c.client)
 }
 
 func msgAddCookie(msg *dns.Msg) *dns.EDNS0_COOKIE {
@@ -589,6 +558,7 @@ func mxResolve(connCache connCache, msg dns.Msg, fd fieldData) mxData {
 	var response *dns.Msg
 	var results []mxDatum
 	var err error
+	registered := true
 
 	for i := 0; i < RETRIES; i++ {
 		nameserver := usedNs[rand.Intn(usedNsLen)]
@@ -606,9 +576,10 @@ func mxResolve(connCache connCache, msg dns.Msg, fd fieldData) mxData {
 				results = append(results, mxDatum{address: dns.Fqdn(strings.ToLower(rrT.Mx)), preference: rrT.Preference})
 			}
 		}
+		registered = response.Rcode != dns.RcodeNameError
 	}
 
-	return mxData{data: results, zoneID: fd.id}
+	return mxData{data: results, zoneID: fd.id, registered: registered}
 }
 
 func addrResolve(connCache connCache, msg dns.Msg, fd fieldData) addrData {
@@ -616,6 +587,7 @@ func addrResolve(connCache connCache, msg dns.Msg, fd fieldData) addrData {
 	var results []string
 	var cnames []cnameEntry
 	var err error
+	registered := true
 
 	for _, qtype := range []uint16{dns.TypeA, dns.TypeAAAA} {
 		msg.Question[0].Qtype = qtype
@@ -641,10 +613,12 @@ func addrResolve(connCache connCache, msg dns.Msg, fd fieldData) addrData {
 					cnames = append(cnames, cnameEntry{source: strings.ToLower(rrT.Hdr.Name), target: strings.ToLower(rrT.Target)})
 				}
 			}
+
+			registered = response.Rcode != dns.RcodeNameError
 		}
 	}
 
-	return addrData{fdResults: fdResults{fieldData: fd, results: results}, cnames: cnames}
+	return addrData{fdResults: fdResults{fieldData: fd, results: results}, cnames: cnames, registered: registered}
 }
 
 func parentCheckResolve(connCache connCache, msg dns.Msg, cp childParent) childParent {
@@ -694,17 +668,17 @@ parentCheckSOALoop:
 
 func checkUpResolve(connCache connCache, msg dns.Msg, cu checkUpData) checkUpData {
 	msg.Question[0].Name = dns.Fqdn(cu.zone)
-	var err error
+	cu.registered = true
 
 	for i := 0; i < RETRIES; i++ {
-		_, err = plainResolve(msg, connCache, cu.ns)
-		if err == nil {
+		if res, err := plainResolve(msg, connCache, cu.ns); err == nil {
+			cu.registered = res.Rcode != dns.RcodeNameError
+			cu.success = true
 			break
 		}
 		//fmt.Printf("checkUpResolve: %s\n", err)
 	}
 
-	cu.success = err == nil
 	return cu
 }
 
@@ -855,9 +829,10 @@ func netIPWriter(db *sql.DB, nameChan chan fieldData, wg *sync.WaitGroup) {
 	namesStmts := map[string]string{
 		"insert":       "INSERT OR IGNORE INTO name_ip (name_id, ip_id) VALUES (?, ?)",
 		"updateNameIP": "UPDATE name_ip SET in_self_zone=TRUE WHERE name_id=? AND ip_id=?",
-		"update":       "UPDATE name SET addr_resolved=TRUE WHERE id=?",
-		"cname":        "UPDATE name SET is_cname=TRUE WHERE id=?",
+		"update":       "UPDATE name SET addr_resolved=TRUE, valid_tried=TRUE, reg_checked=TRUE, registered=? WHERE id=?",
+		"cname":        "UPDATE name SET is_cname=TRUE, reg_checked=TRUE, registered=? WHERE id=?",
 		"cnameEntry":   "INSERT OR IGNORE INTO cname (name_id, target_id) VALUES (?, ?)",
+		"cname_unreg":  "UPDATE name SET reg_checked=TRUE, registered=FALSE WHERE id=?",
 	}
 
 	netWriter(db, nameChan, wg, tablesFields, namesStmts, addrResolverWorker, ipWrite)
@@ -868,10 +843,9 @@ func mxWriter(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
 		"name": "name",
 	}
 	namesStmts := map[string]string{
-		"insert":     "INSERT OR IGNORE INTO zone_mx (zone_id, mx_id, preference) VALUES (?, ?, ?)",
-		"nameToMX":   "UPDATE name SET is_mx=TRUE WHERE id=?",
-		"update":     "UPDATE name SET mx_resolved=TRUE WHERE id=?",
-		"registered": "UPDATE name SET registered=TRUE, reg_checked=TRUE WHERE id=?",
+		"insert":   "INSERT OR IGNORE INTO name_mx (name_id, mx_id, preference) VALUES (?, ?, ?)",
+		"nameToMX": "UPDATE name SET is_mx=TRUE WHERE id=?",
+		"update":   "UPDATE name SET mx_resolved=TRUE, reg_checked=TRUE, registered=? WHERE id=?",
 	}
 
 	netWriter(db, zoneChan, wg, tablesFields, namesStmts, mxResolverWorker, mxWrite)
@@ -933,16 +907,20 @@ func nsWrite(tableMap TableMap, stmtMap StmtMap, nsd fdResults) {
 
 func ipWrite(tableMap TableMap, stmtMap StmtMap, ad addrData) {
 	nameID := ad.id
+	registered := ad.registered
 
 	if len(ad.cnames) > 0 {
 		fmt.Printf("cname from address %s\n", ad.name)
-		stmtMap.exec("cname", nameID)
+		stmtMap.exec("cname", registered, nameID)
 
 		for _, entry := range ad.cnames {
 			srcID := tableMap.get("name", entry.source)
 			targetID := tableMap.get("name", entry.target)
 
 			stmtMap.exec("cnameEntry", srcID, targetID)
+			if !registered {
+				stmtMap.exec("cname_unreg", srcID)
+			}
 		}
 	}
 
@@ -953,23 +931,19 @@ func ipWrite(tableMap TableMap, stmtMap StmtMap, ad addrData) {
 		stmtMap.exec("updateNameIP", nameID, ipID)
 	}
 
-	stmtMap.exec("update", nameID)
+	stmtMap.exec("update", registered, nameID)
 }
 
 func mxWrite(tableMap TableMap, stmtMap StmtMap, mxd mxData) {
 	zoneID := mxd.zoneID
 
-	if len(mxd.data) > 0 {
-		stmtMap.exec("registered", zoneID)
-
-		for _, datum := range mxd.data {
-			mxID := tableMap.get("name", datum.address)
-			stmtMap.exec("nameToMX", mxID)
-			stmtMap.exec("insert", zoneID, mxID, datum.preference)
-		}
+	for _, datum := range mxd.data {
+		mxID := tableMap.get("name", datum.address)
+		stmtMap.exec("nameToMX", mxID)
+		stmtMap.exec("insert", zoneID, mxID, datum.preference)
 	}
 
-	stmtMap.exec("update", zoneID)
+	stmtMap.exec("update", mxd.registered, zoneID)
 }
 
 func checkUpWrite(tableMap TableMap, stmtMap StmtMap, cu checkUpData) {
