@@ -3,11 +3,12 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"github.com/miekg/dns"
 	"math/rand"
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/miekg/dns"
 )
 
 type middleFunc func([]string) []string
@@ -61,11 +62,11 @@ func (wz *walkZone) addKnown(rr dns.NSEC) bool {
 	l := len(wz.knownRanges)
 	i := sort.Search(l, func(i int) bool { return Compare(start, wz.knownRanges[i][0]) <= 0 })
 
-	//fmt.Printf("compare(%s, %s) == %d\n", start, end, Compare(start, end))
-	//fmt.Printf("addKnown i=%d l=%d start=%s end=%s known=%v\n", i, l, start, end, wz.knownRanges)
+	// fmt.Printf("compare(%s, %s) == %d\n", start, end, Compare(start, end))
+	// fmt.Printf("addKnown i=%d l=%d start=%s end=%s known=%v\n", i, l, start, end, wz.knownRanges)
 
 	if i == l { // append
-		//fmt.Printf("=past end start=%s end=%s\n", start, end)
+		// fmt.Printf("=past end start=%s end=%s\n", start, end)
 		if l == 0 {
 			wz.knownRanges = append(wz.knownRanges, [2]string{start, end})
 			return true
@@ -77,7 +78,7 @@ func (wz *walkZone) addKnown(rr dns.NSEC) bool {
 		// if Compare(lastKnown, zone) == 0 { // }
 		if lastKnown == "" {
 			// covered by wraparound
-			//fmt.Printf("=covered by wraparound, lastKnown=%s start=%s end=%s\n", lastKnown, start, end)
+			// fmt.Printf("=covered by wraparound, lastKnown=%s start=%s end=%s\n", lastKnown, start, end)
 		} else if Compare(start, lastKnown) == 1 { // no overlap, append
 			wz.knownRanges = append(wz.knownRanges, [2]string{start, end})
 		} else { // # merge (oldStart < newStart <= (oldEnd, newEnd)) into (oldStart < max(oldEnd, newEnd))
@@ -101,7 +102,7 @@ func (wz *walkZone) addKnown(rr dns.NSEC) bool {
 		switch Compare(end, wz.knownRanges[0][0]) {
 		case -1: // prepend
 			// fmt.Printf("=before start=%s end=%s\n", start, end)
-			wz.knownRanges = append([][2]string{[2]string{start, end}}, wz.knownRanges...)
+			wz.knownRanges = append([][2]string{{start, end}}, wz.knownRanges...)
 		case 0: // merge
 			wz.knownRanges[0][0] = start
 		default:
@@ -109,7 +110,7 @@ func (wz *walkZone) addKnown(rr dns.NSEC) bool {
 		}
 		return true
 	}
-	//fmt.Printf("=middle start=%s end=%s\n", start, end)
+	// fmt.Printf("=middle start=%s end=%s\n", start, end)
 	// middle
 	// explained in python/nsecWalk.py => Zone.AddToMiddle()
 
@@ -248,7 +249,7 @@ func nsecWalkQuery(connCache connCache, msg dns.Msg, zd fieldData) walkZone {
 				if err == nil {
 					break
 				}
-				//fmt.Printf("resolution error %d for %s from nameserver %s : %v\n", i, middle, nameserver, err)
+				// fmt.Printf("resolution error %d for %s from nameserver %s : %v\n", i, middle, nameserver, err)
 			}
 
 			if err != nil {
@@ -314,6 +315,52 @@ func nsecWalkMaster(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
 	netWriter(db, zoneChan, wg, tablesFields, namesStmts, nsecWalkWorker, nsecWalkInsert)
 }
 
+func nsecWalkResults(db *sql.DB) {
+	readerWriter("fetching zone walk results", db, getUnqueriedNsecRes, nsecWalkResWriter)
+}
+
+func nsecWalkResWriter(db *sql.DB, inChan chan rrDBData, wg *sync.WaitGroup) {
+	tablesFields := map[string]string{
+		"name":     "name",
+		"rr_type":  "name",
+		"rr_name":  "name",
+		"rr_value": "value",
+	}
+	namesStmts := map[string]string{
+		"insert":  "INSERT OR IGNORE INTO zone2rr (zone_id, rr_type_id, rr_name_id, rr_value_id, from_self) VALUES (?, ?, ?, ?, TRUE)",
+		"queried": "UPDATE zone_walk_res SET queried=TRUE WHERE id=?",
+	}
+
+	netWriter(db, inChan, wg, tablesFields, namesStmts, nsecWalkResultResolver, nsecWalkResWrite)
+}
+
+func nsecWalkResWrite(tableMap TableMap, stmtMap StmtMap, res nsecWalkResolveRes) {
+	var rrTypeID, rrNameID int64
+	defaultRRTypeID := res.rrType.id
+	defaultRRNameID := res.rrName.id
+
+	for _, rr := range res.results {
+		if rr.rrType == res.rrType.name {
+			rrTypeID = defaultRRTypeID
+		} else {
+			rrTypeID = tableMap.get("rr_type", rr.rrType)
+		}
+
+		if rr.rrName == res.rrName.name {
+			rrNameID = defaultRRNameID
+		} else {
+			rrNameID = tableMap.get("rr_name", rr.rrName)
+		}
+
+		rrValueID := tableMap.get("rr_value", rr.rrValue)
+		zoneID := res.rrValue.id
+
+		stmtMap.exec("insert", zoneID, rrTypeID, rrNameID, rrValueID)
+	}
+
+	stmtMap.exec("queried", res.id)
+}
+
 func nsecWalkInsert(tableMap TableMap, stmtMap StmtMap, zw walkZone) {
 	zoneID := zw.id
 
@@ -364,16 +411,16 @@ func incrementLabel(data []string) []string {
 func minusAppended(data []string) []string {
 	ret := make([]string, len(data))
 	copy(ret, data)
-	ret[0] += "--"
+	ret[0] += "-"
 	return ret
 }
 
 func minusSubdomains(data []string) []string {
-	return append([]string{"--", "--"}, data...)
+	return append([]string{"-", "-"}, data...)
 }
 
 func minusSubdomain(data []string) []string {
-	return append([]string{"--"}, data...)
+	return append([]string{"-"}, data...)
 }
 
 func nop(data []string) []string {

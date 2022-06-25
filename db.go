@@ -3,10 +3,11 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"github.com/jellydator/ttlcache/v3"
-	"github.com/miekg/dns"
 	"sync"
 	"time"
+
+	"github.com/jellydator/ttlcache/v3"
+	"github.com/miekg/dns"
 )
 
 var initStmts = []string{
@@ -269,6 +270,11 @@ type rrDBData struct {
 	rrValue    fieldData
 	fromParent bool
 	fromSelf   bool
+}
+
+type nsecWalkResolveRes struct {
+	rrDBData
+	results []rrData
 }
 
 func initDb(db *sql.DB) {
@@ -880,6 +886,31 @@ func getZone2RR(filter string, db *sql.DB, dataChan chan rrDBData, wg *sync.Wait
 		))
 		wg.Add(1)
 		dataChan <- ad
+	}
+
+	check(rows.Close())
+	check(tx.Commit())
+	wg.Wait()
+	close(dataChan)
+}
+
+func getUnqueriedNsecRes(db *sql.DB, dataChan chan rrDBData, wg *sync.WaitGroup) {
+	tx, err := db.Begin()
+	check(err)
+	rows, err := tx.Query(`
+		SELECT zone_walk_res.zone_id, zone_walk_res.id, rr_name.name, rr_name.id, rr_type.name, rr_type.id
+		FROM zone_walk_res
+		INNER JOIN rr_type ON zone_walk_res.rr_type_id=rr_type.id
+		INNER JOIN rr_name ON zone_walk_res.rr_name_id=rr_name.id
+		WHERE zone_walk_res.queried=FALSE
+	`)
+	check(err)
+
+	for rows.Next() {
+		rrD := rrDBData{fromSelf: true}
+		check(rows.Scan(&rrD.rrValue.id, &rrD.id, &rrD.rrName.name, &rrD.rrName.id, &rrD.rrType.name, &rrD.rrType.id))
+		wg.Add(1)
+		dataChan <- rrD
 	}
 
 	check(rows.Close())

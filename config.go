@@ -11,10 +11,12 @@ type conf struct {
 	AxfrWhitelistedIPs   []string
 }
 
-var usedNs []string
-var usedNsLen int
-var AxfrWhitelistedZoneSet = make(map[string]bool)
-var AxfrWhitelistedIPSet = make(map[string]bool)
+var (
+	usedNs                 []string
+	usedNsLen              int
+	AxfrWhitelistedZoneSet = make(map[string]bool)
+	AxfrWhitelistedIPSet   = make(map[string]bool)
+)
 
 var globalConf conf
 

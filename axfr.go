@@ -3,15 +3,16 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"github.com/miekg/dns"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/miekg/dns"
 )
 
 // TODO this will end up with duplicates if some AXFR fails midway through;
 // collect it all into memory first? (obvious issues with (parallel) big zones)
-//
+
 // use semaphores to reserve memory for transfers so new ones aren't started
 // during big transfers???
 
@@ -67,7 +68,7 @@ func axfrWorker(zipChan chan zoneIP, rrDataChan chan rrData, readWg, wg *sync.Wa
 			Opcode: dns.OpcodeQuery,
 			Rcode:  dns.RcodeSuccess,
 		},
-		Question: []dns.Question{dns.Question{
+		Question: []dns.Question{{
 			Qtype:  dns.TypeAXFR,
 			Qclass: dns.ClassINET,
 		}},
@@ -83,7 +84,7 @@ func axfrWorker(zipChan chan zoneIP, rrDataChan chan rrData, readWg, wg *sync.Wa
 			now := time.Now()
 			err := performAxfr(msg, rrDataChan, ns)
 			if err == nil {
-				//timeScanned := now.UTC().Format("2006/01/02 15:04")
+				// timeScanned := now.UTC().Format("2006/01/02 15:04")
 				rrDataChan <- rrData{
 					zone:    zone,
 					ip:      ns[:len(ns)-3], // drop ":53" suffix

@@ -3,10 +3,11 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"github.com/miekg/dns"
 	"math/rand"
 	"strings"
 	"sync"
+
+	"github.com/miekg/dns"
 )
 
 const (
@@ -16,7 +17,7 @@ const (
 )
 
 var rnameBlacklist map[string]bool = makeSet([]string{
-	//dns.cloudflare.com.",
+	// dns.cloudflare.com.",
 	// "awsdns-hostmaster.amazon.com.",
 	// "hostmaster.nsone.net.",
 	// "admin.dnsimple.com.",
@@ -82,7 +83,8 @@ func getNsecState(nsec3param string, nsecSigs []dns.NSEC, nsec3Sigs []*dns.NSEC3
 		for _, rr := range nsecSigs {
 			decoded := []byte(rr.NextDomain)
 			doDDD(decoded)
-			if decoded[0] == 0 { // simple NSEC white lie
+			switch decoded[0] {
+			case '\x00', '!':
 				nsecType = "secure_nsec"
 			}
 			nsecSArr = append(nsecSArr, rr.Hdr.Name+"^"+rr.NextDomain)
@@ -158,7 +160,7 @@ func checkNsecQuery(connCache connCache, msg dns.Msg, fd fieldData) fdResults {
 		if err == nil {
 			break
 		}
-		//fmt.Printf("checkNsecQuery err 1: nameserver %s, name %s, err no. %d: %v\n", nameserver, fd.name, i, err)
+		// fmt.Printf("checkNsecQuery err 1: nameserver %s, name %s, err no. %d: %v\n", nameserver, fd.name, i, err)
 	}
 
 	if !(err == nil && res.Rcode == dns.RcodeSuccess) {
@@ -174,11 +176,7 @@ nsec3paramLoop:
 	for _, rr := range res.Answer {
 		switch rrT := rr.(type) {
 		case *dns.NSEC3PARAM:
-			var ok bool
 			nsec3param = rrT.String()
-			if !ok {
-				panic(fmt.Sprintf("nsec3paramLoop: %#v", rrT))
-			}
 			break nsec3paramLoop
 		}
 	}
@@ -198,7 +196,7 @@ nsec3paramLoop:
 	nsecState, nsecS = getNsecState(nsec3param, nsecSigs, nsec3Sigs)
 
 	if nsecState == "" { // no nsec/nsec3/nsec3param
-		//fmt.Printf("continue 2: no nsec info for %s\n", fd.name)
+		// fmt.Printf("continue 2: no nsec info for %s\n", fd.name)
 		return fdResults{fieldData: fd}
 	}
 
@@ -225,7 +223,7 @@ soaLoop:
 			if err == nil {
 				break
 			}
-			//fmt.Printf("checkNsecQuery err 2: nameserver %s, name %s, err no. %d: %v\n", nameserver, fd.name, i, err)
+			// fmt.Printf("checkNsecQuery err 2: nameserver %s, name %s, err no. %d: %v\n", nameserver, fd.name, i, err)
 		}
 
 		msg.Question[0].Qtype = dns.TypeNSEC3PARAM
@@ -245,7 +243,7 @@ soaLoop:
 		}
 
 		if !soaFound { // unable to find SOA, skip
-			//fmt.Printf("continue 3: unable to get SOA for %s\n", fd.name)
+			// fmt.Printf("continue 3: unable to get SOA for %s\n", fd.name)
 			return fdResults{fieldData: fd}
 		}
 	}

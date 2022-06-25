@@ -3,9 +3,10 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"github.com/miekg/dns"
 	"math/rand"
 	"sync"
+
+	"github.com/miekg/dns"
 )
 
 type regStatus struct {
@@ -41,7 +42,7 @@ loop:
 		nameserver := usedNs[rand.Intn(usedNsLen)]
 		res, err := plainResolve(msg, connCache, nameserver)
 		if err != nil {
-			//fmt.Printf("regMapper: %s\n", err)
+			// fmt.Printf("regMapper: %s\n", err)
 			continue
 		}
 
@@ -60,7 +61,6 @@ loop:
 	}
 
 	return regStatus{zone: zone, id: zd.id, registered: registered}
-
 }
 
 func detectUnregisteredDomains(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
@@ -103,7 +103,7 @@ func propagateUnreg(db *sql.DB) {
 		rows, err := tx.Query("SELECT changes()")
 		check(err)
 		rows.Next()
-		rows.Scan(&numChanges)
+		check(rows.Scan(&numChanges))
 		check(rows.Close())
 	}
 

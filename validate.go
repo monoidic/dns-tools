@@ -3,11 +3,12 @@ package main
 import (
 	"bufio"
 	"database/sql"
-	"github.com/miekg/dns"
-	"golang.org/x/net/publicsuffix"
 	"os"
 	"strings"
 	"sync"
+
+	"github.com/miekg/dns"
+	"golang.org/x/net/publicsuffix"
 )
 
 type tldStatus uint8
@@ -70,12 +71,11 @@ func validInsert(tableMap TableMap, stmtMap StmtMap, zv zoneValid) {
 	switch zv.status {
 	case invalidTLD:
 		// valid = false
-	//case icannTLD, privateTLD, selfTLD:
+	// case icannTLD, privateTLD, selfTLD:
 	default:
 		valid = true
 	}
 	stmtMap.exec("validation", valid, zv.id)
-
 }
 
 func getTLDs(db *sql.DB, tldChan chan string, wg *sync.WaitGroup) {

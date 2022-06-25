@@ -1,8 +1,9 @@
 package main
 
 import (
-	"github.com/miekg/dns"
 	"strings"
+
+	"github.com/miekg/dns"
 )
 
 func normalizeRR(rr dns.RR) {

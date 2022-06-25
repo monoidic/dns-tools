@@ -5,13 +5,14 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
-	"github.com/jellydator/ttlcache/v3"
-	"github.com/miekg/dns"
 	"math/rand"
 	"net"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jellydator/ttlcache/v3"
+	"github.com/miekg/dns"
 )
 
 type mxData struct {
@@ -269,7 +270,6 @@ func cookieFetcher(protoCache *ttlcache.Cache[string, *dns.Conn], client *dns.Cl
 			oCookie.Cookie = getRandCookie()
 
 			cookie, err := fetchCookie(msg, oCookie, client, conn)
-
 			if err != nil {
 				protoCache.Delete(host)
 				continue
@@ -335,10 +335,10 @@ func plainResolve(msg dns.Msg, connCache connCache, nameserver string) (*dns.Msg
 		if tcpOnly {
 			return nil, err
 		}
-		//fmt.Printf("failed to fetch response from %s over UDP: %v\n", nameserver, err)
+		// fmt.Printf("failed to fetch response from %s over UDP: %v\n", nameserver, err)
 		res, err = connCache.tcpExchange(nameserver, msg)
 		if err != nil {
-			//fmt.Printf("failed to fetch response from %s over TCP: %v\n", nameserver, err)
+			// fmt.Printf("failed to fetch response from %s over TCP: %v\n", nameserver, err)
 			return nil, err
 		}
 	}
@@ -361,6 +361,7 @@ func setOpt(msg *dns.Msg) *dns.OPT {
 	msg.Extra = append(msg.Extra, opt)
 	return opt
 }
+
 func msgSetSize(msg *dns.Msg) {
 	opt := setOpt(msg)
 	opt.SetUDPSize(dns.DefaultMsgSize)
@@ -369,10 +370,10 @@ func msgSetSize(msg *dns.Msg) {
 func resolverWorker[inType, resultType any](inChan chan inType, outChan chan resultType, msg dns.Msg, processData func(c connCache, msg dns.Msg, fd inType) resultType, wg *sync.WaitGroup, once *sync.Once) {
 	connCache := getConnCache()
 
-	//t := TIMEOUT
-	//client.DialTimeout = t
-	//client.ReadTimeout = t
-	//client.WriteTimeout = t
+	// t := TIMEOUT
+	// client.DialTimeout = t
+	// client.ReadTimeout = t
+	// client.WriteTimeout = t
 
 	for fd := range inChan {
 		outChan <- processData(connCache, msg, fd)
@@ -399,7 +400,6 @@ func nsResolverWorker(inChan chan fieldData, outChan chan fdResults, wg *sync.Wa
 	msgSetSize(&msg)
 
 	resolverWorker(inChan, outChan, msg, nsResolve, wg, once)
-
 }
 
 func mxResolverWorker(inChan chan fieldData, outChan chan mxData, wg *sync.WaitGroup, once *sync.Once) {
@@ -471,7 +471,6 @@ func parentCheckFilter(inChan, workerInChan chan childParent, tableMap TableMap,
 	}
 	close(workerInChan)
 	tableMap.wg.Done()
-
 }
 
 func checkUpWorker(inChan, outChan chan checkUpData, wg *sync.WaitGroup, once *sync.Once) {
@@ -525,6 +524,60 @@ func parentNSResolverWorker(inChan chan fdResults, outChan chan parentNSResults,
 	resolverWorker(inChan, outChan, msg, parentNsResolve, wg, once)
 }
 
+func nsecWalkResultResolver(inChan chan rrDBData, outChan chan nsecWalkResolveRes, wg *sync.WaitGroup, once *sync.Once) {
+	msg := dns.Msg{
+		MsgHdr: dns.MsgHdr{
+			Opcode:           dns.OpcodeQuery,
+			RecursionDesired: true,
+			Rcode:            dns.RcodeSuccess,
+		},
+		Question: []dns.Question{{
+			Qclass: dns.ClassINET,
+		}},
+	}
+	msgSetSize(&msg)
+
+	resolverWorker(inChan, outChan, msg, nsecWalkResultResolve, wg, once)
+}
+
+func nsecWalkResultResolve(connCache connCache, msg dns.Msg, rrD rrDBData) nsecWalkResolveRes {
+	msg.Question[0].Name = rrD.rrName.name
+	msg.Question[0].Qtype = dns.StringToType[rrD.rrType.name]
+
+	var response *dns.Msg
+	var err error
+
+	for i := 0; i < RETRIES; i++ {
+		nameserver := usedNs[rand.Intn(usedNsLen)]
+		response, err = plainResolve(msg, connCache, nameserver)
+		if err == nil {
+			break
+		}
+	}
+
+	ret := nsecWalkResolveRes{rrDBData: rrD}
+
+	// TODO
+	if response == nil {
+		return ret
+	}
+
+	rrL := make([]rrData, 0, len(response.Answer))
+
+	for _, rr := range response.Answer {
+		hdr := rr.Header()
+		resRRD := rrData{
+			rrValue: rr.String(),
+			rrType:  dns.TypeToString[hdr.Rrtype],
+			rrName:  hdr.Name,
+		}
+		rrL = append(rrL, resRRD)
+	}
+
+	ret.results = rrL
+	return ret
+}
+
 func nsResolve(connCache connCache, msg dns.Msg, fd fieldData) fdResults {
 	msg.Question[0].Name = dns.Fqdn(fd.name)
 	var response *dns.Msg
@@ -541,7 +594,7 @@ func nsResolve(connCache connCache, msg dns.Msg, fd fieldData) fdResults {
 	}
 
 	if response != nil {
-		//fmt.Printf("nsResolve response: %#v\n", response)
+		// fmt.Printf("nsResolve response: %#v\n", response)
 		for _, rr := range response.Answer {
 			switch rrT := rr.(type) {
 			case *dns.NS:
@@ -566,7 +619,7 @@ func mxResolve(connCache connCache, msg dns.Msg, fd fieldData) mxData {
 		if err == nil {
 			break
 		}
-		//fmt.Printf("mxResolve: %s\n", err)
+		// fmt.Printf("mxResolve: %s\n", err)
 	}
 
 	if response != nil {
@@ -636,7 +689,7 @@ func parentCheckResolve(connCache connCache, msg dns.Msg, cp childParent) childP
 		if err == nil {
 			break
 		}
-		//fmt.Printf("parentCheckResolve: %s\n", err)
+		// fmt.Printf("parentCheckResolve: %s\n", err)
 	}
 
 	if err != nil {
@@ -676,7 +729,7 @@ func checkUpResolve(connCache connCache, msg dns.Msg, cu checkUpData) checkUpDat
 			cu.success = true
 			break
 		}
-		//fmt.Printf("checkUpResolve: %s\n", err)
+		// fmt.Printf("checkUpResolve: %s\n", err)
 	}
 
 	return cu
@@ -695,7 +748,7 @@ func rdnsResolve(connCache connCache, msg dns.Msg, fd fieldData) fdResults {
 		if err == nil {
 			break
 		}
-		//fmt.Printf("rdnsResolve: %s\n", err)
+		// fmt.Printf("rdnsResolve: %s\n", err)
 	}
 
 	if res != nil {

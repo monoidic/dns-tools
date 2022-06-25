@@ -3,11 +3,12 @@ package main
 import (
 	"bufio"
 	"database/sql"
-	"github.com/miekg/dns"
 	"io/fs"
 	"os"
 	"strings"
 	"sync"
+
+	"github.com/miekg/dns"
 )
 
 func readDomainLists(fileChan, domainChan chan string, wg *sync.WaitGroup) {

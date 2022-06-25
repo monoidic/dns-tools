@@ -3,12 +3,13 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"github.com/miekg/dns"
 	"io/fs"
 	"os"
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/miekg/dns"
 )
 
 type zoneData struct {

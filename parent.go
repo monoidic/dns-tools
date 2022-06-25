@@ -2,8 +2,9 @@ package main
 
 import (
 	"database/sql"
-	"github.com/miekg/dns"
 	"sync"
+
+	"github.com/miekg/dns"
 )
 
 type childParent struct {

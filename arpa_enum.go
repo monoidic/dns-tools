@@ -4,13 +4,14 @@ import (
 	"bufio"
 	"database/sql"
 	"fmt"
-	"github.com/miekg/dns"
-	"github.com/yl2chen/cidranger"
 	"math/rand"
 	"net"
 	"os"
 	"strings"
 	"sync"
+
+	"github.com/miekg/dns"
+	"github.com/yl2chen/cidranger"
 )
 
 type rangerEntry struct {
@@ -25,7 +26,7 @@ func (entry rangerEntry) Network() net.IPNet {
 // 2^24 + 2^16 + 2^8 addresses
 // 239 * (2^16) + 239 * 2^8 + 239 addresses
 func generateInAddr(zoneChan chan string, wg *sync.WaitGroup) {
-	//for a := 0; a < 256; a++ {
+	// for a := 0; a < 256; a++ {
 	for a := 1; a < 240; a++ {
 		addrA := fmt.Sprintf("%d.in-addr.arpa.", a)
 		wg.Add(1)
@@ -142,7 +143,7 @@ func inAddrResolve(connCache connCache, msg dns.Msg, zone string) inAddrData {
 		if err == nil {
 			break
 		}
-		//fmt.Printf("inAddrResolve: %s\n", err)
+		// fmt.Printf("inAddrResolve: %s\n", err)
 	}
 
 	if response != nil {
