@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/miekg/dns"
+	"github.com/monoidic/dns"
 	"github.com/yl2chen/cidranger"
 )
 

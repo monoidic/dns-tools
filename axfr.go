@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/miekg/dns"
+	"github.com/monoidic/dns"
 )
 
 // TODO this will end up with duplicates if some AXFR fails midway through;

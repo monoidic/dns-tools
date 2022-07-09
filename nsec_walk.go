@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/miekg/dns"
+	"github.com/monoidic/dns"
 )
 
 type middleFunc func([]string) []string
@@ -36,8 +36,8 @@ func (wz *walkZone) contains(z string) bool {
 }
 
 func (wz *walkZone) addKnown(rr dns.NSEC) bool {
-	start := rr.Hdr.Name
-	end := rr.NextDomain
+	start := strings.ToLower(rr.Hdr.Name)
+	end := strings.ToLower(rr.NextDomain)
 
 	if !(start == wz.zone || strings.HasSuffix(start, "."+wz.zone)) { // subdomain check
 		return false
@@ -228,7 +228,7 @@ func nsecWalkWorker(zoneChan chan fieldData, dataOutChan chan walkZone, wg *sync
 func nsecWalkQuery(connCache connCache, msg dns.Msg, zd fieldData) walkZone {
 	zone := zd.name
 	wz := walkZone{zone: zone, id: zd.id, unhandledRanges: make(map[string]bool), rrTypes: make(map[string][]string), subdomains: make(map[string]bool)}
-	fmt.Printf("starting walk on zone %s\n", zone)
+	// fmt.Printf("starting walk on zone %s\n", zone)
 
 	for start, end, ok := wz.nextUnknownRange(); ok; start, end, ok = wz.nextUnknownRange() {
 		// fmt.Printf("looping, start=%s end=%s known=%v\n", start, end, wz.knownRanges)
@@ -261,9 +261,7 @@ func nsecWalkQuery(connCache connCache, msg dns.Msg, zd fieldData) walkZone {
 			for _, rr := range res.Ns {
 				switch rrT := rr.(type) {
 				case *dns.SOA:
-					soaZone := dns.Fqdn(rrT.Hdr.Name)
-					if Compare(zone, soaZone) != 0 && dns.IsSubDomain(zone, soaZone) {
-						soaZone = strings.ToLower(soaZone)
+					if soaZone := strings.ToLower(rrT.Hdr.Name); Compare(zone, soaZone) != 0 && dns.IsSubDomain(zone, soaZone) {
 						// fmt.Printf("found subdomain %s of domain %s\n", soaZone, zone)
 						wz.subdomains[soaZone] = true
 						foundSubdomains = true
@@ -282,6 +280,7 @@ func nsecWalkQuery(connCache connCache, msg dns.Msg, zd fieldData) walkZone {
 						// fmt.Printf("added entry %v\n", rrT)
 						expanded = true
 					}
+					// fmt.Printf("%#v\n", wz.knownRanges)
 				}
 			}
 
@@ -294,6 +293,10 @@ func nsecWalkQuery(connCache connCache, msg dns.Msg, zd fieldData) walkZone {
 			fmt.Printf("unhandled range start=%s end=%s on zone %s, ranges=%v\n", start, end, zone, wz.knownRanges)
 			wz.addUnhandled(start, end)
 		}
+	}
+
+	if len(wz.unhandledRanges) > 0 {
+		fmt.Printf("unhandled in zone %s: %#v\n", wz.zone, wz.unhandledRanges)
 	}
 
 	return wz
@@ -398,13 +401,13 @@ func nsecWalk(db *sql.DB) {
 
 func decrementLabel(data []string) []string {
 	label := []byte(data[0])
-	label[0]--
+	label[len(label)-1]--
 	return append([]string{string(label)}, data[1:]...)
 }
 
 func incrementLabel(data []string) []string {
 	label := []byte(data[0])
-	label[0]++
+	label[len(label)-1]++
 	return append([]string{string(label)}, data[1:]...)
 }
 
@@ -445,7 +448,7 @@ func getMiddle(zone, start, end string) []string {
 			panic(fmt.Sprintf("end splits to nil: %s", end))
 		}
 
-		for _, f := range []middleFunc{decrementLabel} {
+		for _, f := range []middleFunc{decrementLabel, nop} {
 			res := strings.Join(f(splitEnd), ".") + "."
 			if dns.IsSubDomain(zone, res) {
 				ret = append(ret, res)

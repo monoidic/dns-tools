@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/jellydator/ttlcache/v3"
-	"github.com/miekg/dns"
+	"github.com/monoidic/dns"
 )
 
 type mxData struct {
@@ -569,7 +569,7 @@ func nsecWalkResultResolve(connCache connCache, msg dns.Msg, rrD rrDBData) nsecW
 		resRRD := rrData{
 			rrValue: rr.String(),
 			rrType:  dns.TypeToString[hdr.Rrtype],
-			rrName:  hdr.Name,
+			rrName:  strings.ToLower(hdr.Name),
 		}
 		rrL = append(rrL, resRRD)
 	}

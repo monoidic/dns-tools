@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/miekg/dns"
+	"github.com/monoidic/dns"
 )
 
 const (
@@ -273,7 +273,7 @@ func checkNsecInsert(tableMap TableMap, stmtMap StmtMap, fd fdResults) {
 	zoneID := fd.id
 
 	if len(fd.results) != 0 { // fetch failure
-		nsecStateID := tableMap.get("nsec_state", fd.results[0])
+		nsecStateID := tableMap.roGet("nsec_state", fd.results[0])
 		rnameID := tableMap.get("rname", fd.results[1])
 		mnameID := tableMap.get("mname", fd.results[2])
 		nsecS := fd.results[3]

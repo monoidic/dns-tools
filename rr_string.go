@@ -3,7 +3,7 @@ package main
 import (
 	"strings"
 
-	"github.com/miekg/dns"
+	"github.com/monoidic/dns"
 )
 
 func normalizeRR(rr dns.RR) {

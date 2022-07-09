@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/miekg/dns"
+	"github.com/monoidic/dns"
 )
 
 func readDomainLists(fileChan, domainChan chan string, wg *sync.WaitGroup) {

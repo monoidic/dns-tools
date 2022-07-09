@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/jellydator/ttlcache/v3"
-	"github.com/miekg/dns"
+	"github.com/monoidic/dns"
 )
 
 var initStmts = []string{

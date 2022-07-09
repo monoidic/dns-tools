@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/miekg/dns"
+	"github.com/monoidic/dns"
 	"golang.org/x/net/publicsuffix"
 )
 
