@@ -278,24 +278,20 @@ type nsecWalkResolveRes struct {
 }
 
 func initDb(db *sql.DB) {
-	tx, err := db.Begin()
-	check(err)
+	tx := check1(db.Begin())
 
 	for _, stmt := range initStmts {
-		_, err = tx.Exec(stmt)
-		check(err)
+		check1(tx.Exec(stmt))
 	}
 
 	check(tx.Commit())
 }
 
 func getFDCLoader(qs string, tx *sql.Tx) (ttlcache.Option[string, []fieldData], func()) {
-	stmt, err := tx.Prepare(qs)
-	check(err)
+	stmt := check1(tx.Prepare(qs))
 
 	cacheF := ttlcache.WithLoader[string, []fieldData](ttlcache.LoaderFunc[string, []fieldData](func(c *ttlcache.Cache[string, []fieldData], zone string) *ttlcache.Item[string, []fieldData] {
-		rows, err := stmt.Query(zone)
-		check(err)
+		rows := check1(stmt.Query(zone))
 
 		var ret []fieldData
 
@@ -324,11 +320,6 @@ func getFDCache(qs string, tx *sql.Tx) *FDCache {
 	go cache.Start()
 
 	return &FDCache{cache: cache, cleanup: cleanup, qs: qs, loader: getF}
-}
-
-func (fdc *FDCache) update(tx *sql.Tx) {
-	fdc.cleanup()
-	fdc.loader, fdc.cleanup = getFDCLoader(fdc.qs, tx)
 }
 
 func (fdc *FDCache) clear() {
@@ -441,8 +432,7 @@ func getStmtMap(m map[string]string, tx *sql.Tx) StmtMap {
 	stmtMap := make(map[string]*stmtData)
 
 	for name, query := range m {
-		stmt, err := tx.Prepare(query)
-		check(err)
+		stmt := check1(tx.Prepare(query))
 		stmtMap[name] = &stmtData{stmt: stmt, query: query}
 	}
 
@@ -454,22 +444,18 @@ func getStmtMap(m map[string]string, tx *sql.Tx) StmtMap {
 	}
 }
 
+// needs lock to be locked externally
 func (stmtMap StmtMap) update(tx *sql.Tx) {
-	// needs lock to be locked externally
-	var err error
-
 	for _, std := range stmtMap.data {
 		check(std.stmt.Close())
-		std.stmt, err = tx.Prepare(std.query)
-		check(err)
+		std.stmt = check1(tx.Prepare(std.query))
 	}
 }
 
 func (stmtMap StmtMap) exec(table string, args ...any) {
 	stmtMap.mx.RLock()
 
-	_, err := stmtMap.data[table].stmt.Exec(args...)
-	check(err)
+	check1(stmtMap.data[table].stmt.Exec(args...))
 
 	stmtMap.mx.RUnlock()
 }
@@ -486,24 +472,19 @@ func (stmtMap StmtMap) clear() {
 }
 
 func createInsertF(tx *sql.Tx, tableName string, valueName string) (ttlcache.Option[string, int64], func()) {
-	selectStmt, err := tx.Prepare(fmt.Sprintf("SELECT id FROM %s WHERE %s=? LIMIT 1", tableName, valueName))
-	check(err)
-	insertStmt, err := tx.Prepare(fmt.Sprintf("INSERT INTO %s (%s) VALUES (?)", tableName, valueName))
-	check(err)
+	selectStmt := check1(tx.Prepare(fmt.Sprintf("SELECT id FROM %s WHERE %s=? LIMIT 1", tableName, valueName)))
+	insertStmt := check1(tx.Prepare(fmt.Sprintf("INSERT INTO %s (%s) VALUES (?)", tableName, valueName)))
 
 	cacheF := ttlcache.WithLoader[string, int64](ttlcache.LoaderFunc[string, int64](func(c *ttlcache.Cache[string, int64], arg string) *ttlcache.Item[string, int64] {
-		rows, err := selectStmt.Query(arg)
-		check(err)
+		rows := check1(selectStmt.Query(arg))
 
 		var lastID int64
 
 		if rows.Next() {
 			check(rows.Scan(&lastID))
 		} else {
-			res, err := insertStmt.Exec(arg)
-			check(err)
-			lastID, err = res.LastInsertId()
-			check(err)
+			res := check1(insertStmt.Exec(arg))
+			lastID = check1(res.LastInsertId())
 		}
 
 		check(rows.Close())
@@ -518,12 +499,10 @@ func createInsertF(tx *sql.Tx, tableName string, valueName string) (ttlcache.Opt
 }
 
 func createROGetF(tx *sql.Tx, tableName string, valueName string) (ttlcache.Option[string, int64], func()) {
-	selectStmt, err := tx.Prepare(fmt.Sprintf("SELECT id FROM %s WHERE %s=? LIMIT 1", tableName, valueName))
-	check(err)
+	selectStmt := check1(tx.Prepare(fmt.Sprintf("SELECT id FROM %s WHERE %s=? LIMIT 1", tableName, valueName)))
 
 	cacheF := ttlcache.WithLoader[string, int64](ttlcache.LoaderFunc[string, int64](func(c *ttlcache.Cache[string, int64], arg string) *ttlcache.Item[string, int64] {
-		rows, err := selectStmt.Query(arg)
-		check(err)
+		rows := check1(selectStmt.Query(arg))
 
 		var item *ttlcache.Item[string, int64]
 
@@ -561,8 +540,7 @@ func insertRRWorker(db *sql.DB, rrDataChan chan rrData, wg *sync.WaitGroup) {
 		"self_parent_zone": "UPDATE zone2rr SET from_self=from_self|?, from_parent=from_parent|? WHERE zone_id=? AND rr_type_id=? AND rr_name_id=? AND rr_value_id=?",
 	}
 
-	tx, err := db.Begin()
-	check(err)
+	tx := check1(db.Begin())
 
 	tableMap := getTableMap(tablesFields, tx)
 	stmtMap := getStmtMap(namesStmts, tx)
@@ -577,8 +555,7 @@ func insertRRWorker(db *sql.DB, rrDataChan chan rrData, wg *sync.WaitGroup) {
 			stmtMap.mx.Lock()
 
 			check(tx.Commit())
-			tx, err = db.Begin()
-			check(err)
+			tx = check1(db.Begin())
 
 			tableMap.update(tx)
 			stmtMap.update(tx)
@@ -673,8 +650,7 @@ func insertMXRR(db *sql.DB, rrChan chan rrDBData, wg *sync.WaitGroup) {
 }
 
 func mxRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
-	rr, err := dns.NewRR(ad.rrValue.name)
-	check(err)
+	rr := check1(dns.NewRR(ad.rrValue.name))
 
 	mxRR := rr.(*dns.MX)
 
@@ -687,8 +663,7 @@ func mxRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
 }
 
 func ipRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
-	rr, err := dns.NewRR(ad.rrValue.name)
-	check(err)
+	rr := check1(dns.NewRR(ad.rrValue.name))
 
 	var ip string
 	switch rrT := rr.(type) {
@@ -713,8 +688,7 @@ func ipRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
 }
 
 func nsRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
-	rr, err := dns.NewRR(ad.rrValue.name)
-	check(err)
+	rr := check1(dns.NewRR(ad.rrValue.name))
 	nsRR := rr.(*dns.NS)
 
 	zoneID := tableMap.get("name", ad.rrName.name)
@@ -738,8 +712,7 @@ func nsRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
 }
 
 func insertRR[rrType any](db *sql.DB, rrChan chan rrType, wg *sync.WaitGroup, tablesFields, namesStmts map[string]string, rrF func(tableMap TableMap, stmtMap StmtMap, rrD rrType)) {
-	tx, err := db.Begin()
-	check(err)
+	tx := check1(db.Begin())
 
 	tableMap := getTableMap(tablesFields, tx)
 	stmtMap := getStmtMap(namesStmts, tx)
@@ -754,8 +727,7 @@ func insertRR[rrType any](db *sql.DB, rrChan chan rrType, wg *sync.WaitGroup, ta
 			stmtMap.mx.Lock()
 
 			check(tx.Commit())
-			tx, err = db.Begin()
-			check(err)
+			tx = check1(db.Begin())
 
 			tableMap.update(tx)
 			stmtMap.update(tx)
@@ -841,10 +813,8 @@ func rdnsIPReader(db *sql.DB, ipChan chan fieldData, wg *sync.WaitGroup) {
 }
 
 func getDbFieldData(qs string, db *sql.DB, dataChan chan fieldData, wg *sync.WaitGroup) {
-	tx, err := db.Begin()
-	check(err)
-	rows, err := tx.Query(qs)
-	check(err)
+	tx := check1(db.Begin())
+	rows := check1(tx.Query(qs))
 
 	for rows.Next() {
 		var fd fieldData
@@ -860,9 +830,8 @@ func getDbFieldData(qs string, db *sql.DB, dataChan chan fieldData, wg *sync.Wai
 }
 
 func getZone2RR(filter string, db *sql.DB, dataChan chan rrDBData, wg *sync.WaitGroup) {
-	tx, err := db.Begin()
-	check(err)
-	rows, err := tx.Query(fmt.Sprintf(`
+	tx := check1(db.Begin())
+	rows := check1(tx.Query(fmt.Sprintf(`
 		SELECT
 			zone2rr.id, zone2rr.from_parent, zone2rr.from_self,
 			rr_type.name, rr_type.id,
@@ -873,8 +842,7 @@ func getZone2RR(filter string, db *sql.DB, dataChan chan rrDBData, wg *sync.Wait
 		INNER JOIN rr_name ON zone2rr.rr_name_id=rr_name.id
 		INNER JOIN rr_value ON zone2rr.rr_value_id=rr_value.id
 		WHERE zone2rr.parsed=FALSE AND %s
-	`, filter))
-	check(err)
+	`, filter)))
 
 	for rows.Next() {
 		var ad rrDBData
@@ -895,16 +863,14 @@ func getZone2RR(filter string, db *sql.DB, dataChan chan rrDBData, wg *sync.Wait
 }
 
 func getUnqueriedNsecRes(db *sql.DB, dataChan chan rrDBData, wg *sync.WaitGroup) {
-	tx, err := db.Begin()
-	check(err)
-	rows, err := tx.Query(`
+	tx := check1(db.Begin())
+	rows := check1(tx.Query(`
 		SELECT zone_walk_res.zone_id, zone_walk_res.id, rr_name.name, rr_name.id, rr_type.name, rr_type.id
 		FROM zone_walk_res
 		INNER JOIN rr_type ON zone_walk_res.rr_type_id=rr_type.id
 		INNER JOIN rr_name ON zone_walk_res.rr_name_id=rr_name.id
 		WHERE zone_walk_res.queried=FALSE
-	`)
-	check(err)
+	`))
 
 	for rows.Next() {
 		rrD := rrDBData{fromSelf: true}

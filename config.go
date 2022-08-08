@@ -21,8 +21,7 @@ var (
 var globalConf conf
 
 func readConfig() {
-	b, err := os.ReadFile("conf.json")
-	check(err)
+	b := check1(os.ReadFile("conf.json"))
 
 	check(json.Unmarshal(b, &globalConf))
 	usedNs = globalConf.Ns

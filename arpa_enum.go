@@ -47,8 +47,7 @@ func generateInAddr(zoneChan chan string, wg *sync.WaitGroup) {
 }
 
 func generateInAddrNets(zoneChan chan string, wg *sync.WaitGroup, netsFile, cc string) {
-	fd, err := os.Open(netsFile)
-	check(err)
+	fd := check1(os.Open(netsFile))
 
 	scanner := bufio.NewScanner(fd)
 	ranger := cidranger.NewPCTrieRanger()
@@ -58,10 +57,9 @@ func generateInAddrNets(zoneChan chan string, wg *sync.WaitGroup, netsFile, cc s
 		if strings.Contains(text, ".") { // IPv4 only here
 			split := strings.SplitN(text, "\t", 2)
 			if len(split) != 2 {
-				panic(fmt.Sprintf("invalid line: %s", text))
+				panic(fmt.Sprintf("invalid line: %q", text))
 			}
-			_, subnet, err := net.ParseCIDR(split[1])
-			check(err)
+			_, subnet := check2(net.ParseCIDR(split[1]))
 			check(ranger.Insert(rangerEntry{subnet: *subnet, match: split[0] == cc}))
 		}
 	}
@@ -74,8 +72,7 @@ func generateInAddrNets(zoneChan chan string, wg *sync.WaitGroup, netsFile, cc s
 		addrA := fmt.Sprintf("%d.in-addr.arpa.", a)
 		ip[0] = byte(a)
 
-		containingNets, err = ranger.ContainingNetworks(ip)
-		check(err)
+		containingNets = check1(ranger.ContainingNetworks(ip))
 
 		if length = len(containingNets); length > 0 && containingNets[length-1].(rangerEntry).match {
 			wg.Add(1)
@@ -85,8 +82,7 @@ func generateInAddrNets(zoneChan chan string, wg *sync.WaitGroup, netsFile, cc s
 		for b := 0; b < 256; b++ {
 			addrB := fmt.Sprintf("%d.%s", b, addrA)
 			ip[1] = byte(b)
-			containingNets, err = ranger.ContainingNetworks(ip)
-			check(err)
+			containingNets = check1(ranger.ContainingNetworks(ip))
 
 			if length = len(containingNets); length > 0 && containingNets[length-1].(rangerEntry).match {
 				wg.Add(1)
@@ -96,8 +92,7 @@ func generateInAddrNets(zoneChan chan string, wg *sync.WaitGroup, netsFile, cc s
 			for c := 0; c < 256; c++ {
 				ip[2] = byte(c)
 
-				containingNets, err = ranger.ContainingNetworks(ip)
-				check(err)
+				containingNets = check1(ranger.ContainingNetworks(ip))
 
 				if length = len(containingNets); length > 0 && containingNets[length-1].(rangerEntry).match {
 					wg.Add(1)

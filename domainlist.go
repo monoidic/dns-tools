@@ -13,8 +13,7 @@ import (
 
 func readDomainLists(fileChan, domainChan chan string, wg *sync.WaitGroup) {
 	for filename := range fileChan {
-		fp, err := os.Open(filename)
-		check(err)
+		fp := check1(os.Open(filename))
 
 		scanner := bufio.NewScanner(fp)
 
@@ -37,8 +36,7 @@ func insertDomainWorker(db *sql.DB, domainChan chan string, wg *sync.WaitGroup) 
 		"domain": "UPDATE name SET is_zone=TRUE WHERE id=?",
 	}
 
-	tx, err := db.Begin()
-	check(err)
+	tx := check1(db.Begin())
 
 	tableMap := getTableMap(tablesFields, tx)
 	stmtMap := getStmtMap(namesStmts, tx)
@@ -53,8 +51,7 @@ func insertDomainWorker(db *sql.DB, domainChan chan string, wg *sync.WaitGroup) 
 			stmtMap.mx.Lock()
 
 			check(tx.Commit())
-			tx, err = db.Begin()
-			check(err)
+			tx = check1(db.Begin())
 
 			tableMap.update(tx)
 			stmtMap.update(tx)
@@ -81,12 +78,10 @@ func domainInsert(tableMap TableMap, stmtMap StmtMap, domain string) {
 
 func parseDomainLists(db *sql.DB) {
 	var matches []string
-	var err error
 	if len(args) > 0 {
 		matches = args
 	} else {
-		matches, err = fs.Glob(os.DirFS("."), "lists/*.txt") // */
-		check(err)
+		matches = check1(fs.Glob(os.DirFS("."), "lists/*.txt"))
 	}
 
 	fileChan := make(chan string, BUFLEN)

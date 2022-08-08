@@ -92,7 +92,7 @@ func getConnCache() connCache {
 
 	ttlOption := ttlcache.WithTTL[string, *dns.Conn](25 * time.Second)
 	tcpCacheF := connCacheLoader(client, "tcp")
-	tcpCache := ttlcache.New[string, *dns.Conn](ttlOption, tcpCacheF)
+	tcpCache := ttlcache.New(ttlOption, tcpCacheF)
 	go tcpCache.Start()
 	tcpCache.OnEviction(connCacheEviction)
 	tcpCookieCache := getCookieCache(tcpCache, client)
@@ -105,7 +105,7 @@ func getConnCache() connCache {
 		client.Net = "tcp"
 	} else {
 		udpCacheF = connCacheLoader(client, "udp")
-		udpCache = ttlcache.New[string, *dns.Conn](ttlOption, udpCacheF)
+		udpCache = ttlcache.New(ttlOption, udpCacheF)
 		udpCookieCache = getCookieCache(udpCache, client)
 		go udpCache.Start()
 		udpCache.OnEviction(connCacheEviction)
@@ -123,7 +123,7 @@ func getConnCache() connCache {
 func getCookieCache(protoCache *ttlcache.Cache[string, *dns.Conn], client *dns.Client) *ttlcache.Cache[string, string] {
 	cookieF := cookieFetcher(protoCache, client)
 	ttlOption := ttlcache.WithTTL[string, string](5 * time.Minute)
-	cache := ttlcache.New[string, string](cookieF, ttlOption)
+	cache := ttlcache.New(cookieF, ttlOption)
 	go cache.Start()
 	return cache
 }
@@ -135,22 +135,6 @@ func getNull[T any](cache *ttlcache.Cache[string, T], key string) T {
 		value = item.Value()
 	}
 	return value
-}
-
-func (c connCache) getUDP(hostname string) *dns.Conn {
-	return getNull(c.udpCache, hostname)
-}
-
-func (c connCache) getTCP(hostname string) *dns.Conn {
-	return getNull(c.tcpCache, hostname)
-}
-
-func (c connCache) getUDPCookie(hostname string) string {
-	return getNull(c.udpCookieCache, hostname)
-}
-
-func (c connCache) getTCPCookie(hostname string) string {
-	return getNull(c.tcpCookieCache, hostname)
 }
 
 func exchange(hostname string, msg dns.Msg, cookieCache *ttlcache.Cache[string, string], connCache *ttlcache.Cache[string, *dns.Conn], client *dns.Client) (*dns.Msg, error) {
@@ -186,7 +170,6 @@ func (c connCache) udpExchange(hostname string, msg dns.Msg) (*dns.Msg, error) {
 
 func msgAddCookie(msg *dns.Msg) *dns.EDNS0_COOKIE {
 	opt := setOpt(msg)
-	var oCookie *dns.EDNS0_COOKIE
 	for _, rr := range opt.Option {
 		switch rrT := rr.(type) {
 		case *dns.EDNS0_COOKIE:
@@ -194,7 +177,7 @@ func msgAddCookie(msg *dns.Msg) *dns.EDNS0_COOKIE {
 		}
 	}
 
-	oCookie = &dns.EDNS0_COOKIE{Code: dns.EDNS0COOKIE}
+	oCookie := &dns.EDNS0_COOKIE{Code: dns.EDNS0COOKIE}
 	opt.Option = append(opt.Option, oCookie)
 	return oCookie
 }
@@ -269,7 +252,7 @@ func cookieFetcher(protoCache *ttlcache.Cache[string, *dns.Conn], client *dns.Cl
 			conn := connItem.Value()
 			oCookie.Cookie = getRandCookie()
 
-			cookie, err := fetchCookie(msg, oCookie, client, conn)
+			cookie, err := fetchCookie(msg, client, conn)
 			if err != nil {
 				protoCache.Delete(host)
 				continue
@@ -282,7 +265,7 @@ func cookieFetcher(protoCache *ttlcache.Cache[string, *dns.Conn], client *dns.Cl
 	}))
 }
 
-func fetchCookie(msg dns.Msg, oCookie *dns.EDNS0_COOKIE, client *dns.Client, conn *dns.Conn) (cookie string, err error) {
+func fetchCookie(msg dns.Msg, client *dns.Client, conn *dns.Conn) (cookie string, err error) {
 	res, _, err := client.ExchangeWithConn(&msg, conn)
 	if err != nil {
 		return "", err
@@ -435,7 +418,7 @@ func addrResolverWorker(inChan chan fieldData, outChan chan addrData, wg *sync.W
 	resolverWorker(inChan, outChan, msg, addrResolve, wg, once)
 }
 
-func parentCheckWorker(inChan, outChan chan childParent, wg *sync.WaitGroup, tableMap TableMap, stmtMap StmtMap, once *sync.Once) {
+func parentCheckWorker(inChan, outChan chan childParent, wg *sync.WaitGroup, tableMap TableMap, _ StmtMap, once *sync.Once) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -450,13 +433,13 @@ func parentCheckWorker(inChan, outChan chan childParent, wg *sync.WaitGroup, tab
 	msgSetSize(&msg)
 
 	workerInChan := make(chan childParent, BUFLEN)
-	go parentCheckFilter(inChan, workerInChan, tableMap, stmtMap)
+	go parentCheckFilter(inChan, workerInChan, tableMap)
 
 	resolverWorker(workerInChan, outChan, msg, parentCheckResolve, wg, once)
 }
 
 // bypass resolver if already in DB
-func parentCheckFilter(inChan, workerInChan chan childParent, tableMap TableMap, stmtMap StmtMap) {
+func parentCheckFilter(inChan, workerInChan chan childParent, tableMap TableMap) {
 	tableMap.wg.Add(1)
 	for cp := range inChan {
 		if cp.parentGuess == "" {
@@ -736,13 +719,12 @@ func checkUpResolve(connCache connCache, msg dns.Msg, cu checkUpData) checkUpDat
 }
 
 func rdnsResolve(connCache connCache, msg dns.Msg, fd fieldData) fdResults {
-	var err error
-	msg.Question[0].Name, err = dns.ReverseAddr(fd.name)
-	check(err)
+	msg.Question[0].Name = check1(dns.ReverseAddr(fd.name))
 	var res *dns.Msg
 	var results []string
 
 	for i := 0; i < RETRIES; i++ {
+		var err error
 		nameserver := usedNs[rand.Intn(usedNsLen)]
 		res, err = plainResolve(msg, connCache, nameserver)
 		if err == nil {
@@ -812,8 +794,7 @@ func netWriterTable[inType any, resultType any](db *sql.DB, inChan chan inType, 
 	var once sync.Once
 	var workerWg sync.WaitGroup
 
-	tx, err := db.Begin()
-	check(err)
+	tx := check1(db.Begin())
 
 	tableMap := getTableMap(tablesFields, tx)
 	stmtMap := getStmtMap(namesStmts, tx)
@@ -833,8 +814,7 @@ func netWriterTable[inType any, resultType any](db *sql.DB, inChan chan inType, 
 			stmtMap.mx.Lock()
 
 			check(tx.Commit())
-			tx, err = db.Begin()
-			check(err)
+			tx = check1(db.Begin())
 
 			tableMap.update(tx)
 			stmtMap.update(tx)
@@ -999,15 +979,14 @@ func mxWrite(tableMap TableMap, stmtMap StmtMap, mxd mxData) {
 	stmtMap.exec("update", mxd.registered, zoneID)
 }
 
-func checkUpWrite(tableMap TableMap, stmtMap StmtMap, cu checkUpData) {
+func checkUpWrite(_ TableMap, stmtMap StmtMap, cu checkUpData) {
 	stmtMap.exec("update", cu.success, cu.ipID)
 }
 
 func checkUpReader(db *sql.DB, checkChan chan checkUpData, wg *sync.WaitGroup) {
 	// each NS IP and one zone it is meant to serve
-	tx, err := db.Begin()
-	check(err)
-	rows, err := tx.Query(`
+	tx := check1(db.Begin())
+	rows := check1(tx.Query(`
 		SELECT DISTINCT ip.address, zone.name, ip.id
 		FROM zone_ns
 		INNER JOIN name AS zone ON zone_ns.zone_id = zone.id
@@ -1015,8 +994,7 @@ func checkUpReader(db *sql.DB, checkChan chan checkUpData, wg *sync.WaitGroup) {
 		INNER JOIN ip ON name_ip.ip_id = ip.id
 		WHERE ip.address LIKE '%.%' AND ip.resp_checked=FALSE AND zone.is_zone=TRUE
 		GROUP BY ip.id
-	`)
-	check(err)
+	`))
 
 	for rows.Next() {
 		var ip, zone string
@@ -1046,10 +1024,8 @@ func zoneIPReader(db *sql.DB, zipChan chan zoneIP, wg *sync.WaitGroup, extraFilt
 		WHERE ip.responsive=TRUE %s
 	`, extraFilter)
 
-	tx, err := db.Begin()
-	check(err)
-	rows, err := tx.Query(qs)
-	check(err)
+	tx := check1(db.Begin())
+	rows := check1(tx.Query(qs))
 
 	for rows.Next() {
 		var zone, ip fieldData
@@ -1066,8 +1042,7 @@ func zoneIPReader(db *sql.DB, zipChan chan zoneIP, wg *sync.WaitGroup, extraFilt
 }
 
 func nsIPAdderWorker(db *sql.DB, zoneChan chan fieldData, withNSChan chan fdResults) {
-	tx, err := db.Begin()
-	check(err)
+	tx := check1(db.Begin())
 
 	nsCache := getFDCache(`
 		SELECT DISTINCT ip.address || ':53', ip.id

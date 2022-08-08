@@ -1,4 +1,17 @@
+scan SPF records for unreg domains?
++ other stuff relying on DNS
+
+for name in {id,version,hostname}.bind; do echo $name; dig +short -c CH -t TXT $name @${ns_to_scan}; done
+
+figure out better method for checking for unregistered domains (fails due to NXDOMAIN on ENT on non-spec-following DNS auth servers)
+
+flag more stuff as registered/valid_tried based on e.g working queries
+
+avoid registration check for parent_name insertions (check from_parent in nsRRF)
+
 use UPSERT?
+
+mark registrations in net_ip (NS name)/net_mx/net_ns (zone name)
 
 add name_parent during zone file parsing + axfr?
 

@@ -5,6 +5,7 @@ bin='./dns-tools'
 functions="
 axfr
 zone_walk
+rdns_map
 "
 
 # TODO
@@ -31,9 +32,9 @@ _ee_init() {
 
 axfr() {
 	# perform AXFR on all .ee zones on each nameserver
-#	_ee_init
-#	$bin -db ee.sqlite3 -net_{ns,ip}
-#	$bin -db ee.sqlite3 -axfr
+	_ee_init
+	$bin -db ee.sqlite3 -net_{ns,ip}
+	$bin -db ee.sqlite3 -axfr
 
 	echo "for results, use 'sqlite3 ee.sqlite3 <query>'"
 	echo 'for a list of all domains with vulnerable nameservers and the associated nameservers:'
@@ -47,16 +48,36 @@ axfr() {
 'WHERE name_ip.name_id=ns.id'
 
 	echo -e "\nfor the AXFR results themselves:"
-	echo 'SELECT rr_name.name, rr_type.name, rr_value.value '\
+	echo 'SELECT rr_name.name, rr_value.value '\
 'FROM zone2rr '\
 'INNER JOIN rr_name ON zone2rr.rr_name_id=rr_name.id '\
-'INNER JOIN rr_type ON zone2rr.rr_type_id=rr_type.id '\
 'INNER JOIN rr_value ON zone2rr.rr_value_id=rr_value.id'
 }
 
 zone_walk() {
 	_ee_init
 	$bin -db ee.sqlite3 -nsec_map -zone_walk
+
+	echo "for results, use 'sqlite3 ee.sqlite3 <query>'"
+	echo 'for a list of all record names and types (not the values, fetch separately):'
+	echo 'SELECT rr_name.name, rr_type.name '\
+'FROM zone_walk_res '\
+'INNER JOIN rr_name ON zone_walk_res.rr_name_id=rr_name.id '\
+'INNER JOIN rr_type ON zone_walk_res.rr_type_id=rr_type.id '
 }
+
+rdns_map() {
+	if ! [[ -e nets.txt ]]; then
+		echo 'generate nets.txt in the current working directory with github.com/monoidic/rir@latest, via:'
+		echo 'rir -a > nets.txt'
+		exit 1
+	fi
+
+	$bin -db ee.sqlite3 -cc EE -net_file nets.txt -in_addr
+
+	# query
+}
+
+
 
 main "$1" "$0"

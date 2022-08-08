@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 const (
@@ -36,6 +36,16 @@ func check(err error) {
 		fmt.Printf("%T %#v\n", err, err)
 		panic(err)
 	}
+}
+
+func check1[T any](arg1 T, err error) T {
+	check(err)
+	return arg1
+}
+
+func check2[T1, T2 any](arg1 T1, arg2 T2, err error) (T1, T2) {
+	check(err)
+	return arg1, arg2
 }
 
 type flagData struct {
@@ -121,9 +131,8 @@ func main() {
 	readConfig()
 	netCC = strings.ToUpper(netCC)
 
-	connstring := fmt.Sprintf("file:%s?_journal_mode=WAL&mode=rwc", dbName)
-	db, err := sql.Open("sqlite3", connstring)
-	check(err)
+	connstring := fmt.Sprintf("file:%s?_pragma=journal_mode=WAL&mode=rwc", dbName)
+	db := check1(sql.Open("sqlite", connstring))
 
 	initDb(db)
 

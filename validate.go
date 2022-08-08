@@ -66,7 +66,7 @@ func validWriter(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
 	netWriter(db, zoneChan, wg, tablesFields, namesStmts, validMapper, validInsert)
 }
 
-func validInsert(tableMap TableMap, stmtMap StmtMap, zv zoneValid) {
+func validInsert(_ TableMap, stmtMap StmtMap, zv zoneValid) {
 	var valid bool
 	switch zv.status {
 	case invalidTLD:
@@ -78,9 +78,8 @@ func validInsert(tableMap TableMap, stmtMap StmtMap, zv zoneValid) {
 	stmtMap.exec("validation", valid, zv.id)
 }
 
-func getTLDs(db *sql.DB, tldChan chan string, wg *sync.WaitGroup) {
-	fp, err := os.Open("lists/tld.txt")
-	check(err)
+func getTLDs(_ *sql.DB, tldChan chan string, wg *sync.WaitGroup) {
+	fp := check1(os.Open("lists/tld.txt"))
 
 	scanner := bufio.NewScanner(fp)
 

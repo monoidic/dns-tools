@@ -19,8 +19,7 @@ type zoneData struct {
 func readZonefiles(zoneDataChan chan zoneData, rrDataChan chan rrData, wg *sync.WaitGroup) {
 	for zoneD := range zoneDataChan {
 		zoneName, filename := zoneD.zone, zoneD.filename
-		fp, err := os.Open(filename)
-		check(err)
+		fp := check1(os.Open(filename))
 
 		zp := dns.NewZoneParser(fp, zoneName, filename)
 		zoneLower := strings.ToLower(zoneName)
@@ -66,12 +65,10 @@ func readZonefiles(zoneDataChan chan zoneData, rrDataChan chan rrData, wg *sync.
 
 func parseZoneFiles(db *sql.DB) {
 	var matches []string
-	var err error
 	if len(args) > 0 {
 		matches = args
 	} else {
-		matches, err = fs.Glob(os.DirFS("."), "zones/*.zone") // */
-		check(err)
+		matches = check1(fs.Glob(os.DirFS("."), "zones/*.zone"))
 	}
 
 	pattern := regexp.MustCompile("zones/([a-z0-9.-]+)zone")

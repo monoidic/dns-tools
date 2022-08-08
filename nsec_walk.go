@@ -25,14 +25,14 @@ type walkZone struct {
 func (wz *walkZone) contains(z string) bool {
 	l := len(wz.knownRanges)
 
-	i := sort.Search(l, func(i int) bool { return Compare(wz.knownRanges[i][0], z) <= 0 })
+	i := sort.Search(l, func(i int) bool { return dns.Compare(wz.knownRanges[i][0], z) <= 0 })
 	if i == l {
 		return false
 	}
 
 	r := wz.knownRanges[i]
 	start, end := r[0], r[1]
-	return Compare(start, z) <= 0 && (end == wz.zone || Compare(z, end) == -1)
+	return dns.Compare(start, z) <= 0 && (end == "" || dns.Compare(z, end) == -1)
 }
 
 func (wz *walkZone) addKnown(rr dns.NSEC) bool {
@@ -50,19 +50,19 @@ func (wz *walkZone) addKnown(rr dns.NSEC) bool {
 
 	var nsecTypes []string
 	for _, t := range rr.TypeBitMap {
-		switch s := dns.Type(t).String(); s {
-		case "NSEC", "RRSIG": // undesirable
+		switch t {
+		case dns.TypeNSEC, dns.TypeRRSIG: // skip
 		default:
-			nsecTypes = append(nsecTypes, s)
+			nsecTypes = append(nsecTypes, dns.Type(t).String())
 		}
 	}
 
 	wz.rrTypes[start] = nsecTypes
 
 	l := len(wz.knownRanges)
-	i := sort.Search(l, func(i int) bool { return Compare(start, wz.knownRanges[i][0]) <= 0 })
+	i := sort.Search(l, func(i int) bool { return dns.Compare(start, wz.knownRanges[i][0]) <= 0 })
 
-	// fmt.Printf("compare(%s, %s) == %d\n", start, end, Compare(start, end))
+	// fmt.Printf("dns.Compare(%s, %s) == %d\n", start, end, dns.Compare(start, end))
 	// fmt.Printf("addKnown i=%d l=%d start=%s end=%s known=%v\n", i, l, start, end, wz.knownRanges)
 
 	if i == l { // append
@@ -75,21 +75,22 @@ func (wz *walkZone) addKnown(rr dns.NSEC) bool {
 		lastKnown := wz.knownRanges[l-1][1]
 		zone := wz.zone
 
-		// if Compare(lastKnown, zone) == 0 { // }
+		// if dns.Compare(lastKnown, zone) == 0 { // }
 		if lastKnown == "" {
 			// covered by wraparound
 			// fmt.Printf("=covered by wraparound, lastKnown=%s start=%s end=%s\n", lastKnown, start, end)
-		} else if Compare(start, lastKnown) == 1 { // no overlap, append
+		} else if dns.Compare(start, lastKnown) == 1 { // no overlap, append
 			wz.knownRanges = append(wz.knownRanges, [2]string{start, end})
 		} else { // # merge (oldStart < newStart <= (oldEnd, newEnd)) into (oldStart < max(oldEnd, newEnd))
-			if Compare(wz.knownRanges[l-1][0], start) != -1 {
-				panic(fmt.Sprintf("assertion failure, merge last range %s < %s evaluated false, lastKnown=%s, knownRanges=%v", wz.knownRanges[l-1][0], start, lastKnown, wz.knownRanges))
+			if dns.Compare(wz.knownRanges[l-1][0], start) != -1 {
+				fmt.Printf("assertion failure, merge last range %s < %s evaluated false, lastKnown=%s, knownRanges=%v", wz.knownRanges[l-1][0], start, lastKnown, wz.knownRanges)
+				return false
 			}
 			var newEnd string
-			if Compare(end, zone) == 0 || Compare(lastKnown, zone) == 0 {
+			if dns.Compare(end, zone) == 0 || dns.Compare(lastKnown, zone) == 0 {
 				newEnd = zone
 			} else {
-				if Compare(end, lastKnown) == 1 {
+				if dns.Compare(end, lastKnown) == 1 {
 					newEnd = end
 				} else {
 					newEnd = lastKnown
@@ -99,14 +100,15 @@ func (wz *walkZone) addKnown(rr dns.NSEC) bool {
 		}
 		return true
 	} else if i == 0 { // prepend or merge with first
-		switch Compare(end, wz.knownRanges[0][0]) {
+		switch dns.Compare(end, wz.knownRanges[0][0]) {
 		case -1: // prepend
 			// fmt.Printf("=before start=%s end=%s\n", start, end)
 			wz.knownRanges = append([][2]string{{start, end}}, wz.knownRanges...)
 		case 0: // merge
 			wz.knownRanges[0][0] = start
 		default:
-			panic(fmt.Sprintf("prepend or merge: %s > %s unexpected", end, wz.knownRanges[0][0]))
+			fmt.Printf("prepend or merge: %s > %s unexpected", end, wz.knownRanges[0][0])
+			return false
 		}
 		return true
 	}
@@ -119,24 +121,27 @@ func (wz *walkZone) addKnown(rr dns.NSEC) bool {
 	indexStart, indexEnd := iR[0], iR[1]
 	prevStart, prevEnd := prevR[0], prevR[1]
 
-	switch Compare(start, indexStart) {
+	switch dns.Compare(start, indexStart) {
 	case 0: // start
-		if Compare(end, indexEnd) == 1 {
-			panic(fmt.Sprintf("unexpected value at start == indexStart, %s _ %s _ %s _ %s", start, end, indexStart, indexEnd))
+		if dns.Compare(end, indexEnd) == 1 {
+			fmt.Printf("unexpected value at start == indexStart, %s _ %s _ %s _ %s", start, end, indexStart, indexEnd)
+			return false
 		}
 
 	case 1: // middle
-		if Compare(start, indexEnd) == -1 { // middle
-			if Compare(end, indexEnd) == 1 {
-				panic(fmt.Sprintf("unexpected value at indexStart < start < indexEnd, %s _ %s _ %s _ %s", start, end, indexStart, indexEnd))
+		if dns.Compare(start, indexEnd) == -1 { // middle
+			if dns.Compare(end, indexEnd) == 1 {
+				fmt.Printf("unexpected value at indexStart < start < indexEnd, %s _ %s _ %s _ %s", start, end, indexStart, indexEnd)
+				return false
 			}
 		} else {
-			panic(fmt.Sprintf("unreachable, %s _ %s _ %s _ %s", start, end, indexStart, indexEnd))
+			fmt.Printf("unreachable, %s _ %s _ %s _ %s", start, end, indexStart, indexEnd)
+			return false
 		}
 
 	case -1: // end or outside
-		cmpEndIndexStart := Compare(end, indexStart)
-		cmpStartPrevEnd := Compare(start, prevEnd)
+		cmpEndIndexStart := dns.Compare(end, indexStart)
+		cmpStartPrevEnd := dns.Compare(start, prevEnd)
 
 		switch switchKey := cmpStartPrevEnd*3 + cmpEndIndexStart; switchKey {
 		case 0*3 + 0: // end, merge
@@ -150,7 +155,8 @@ func (wz *walkZone) addKnown(rr dns.NSEC) bool {
 			wz.knownRanges = append(wz.knownRanges[:i+1], wz.knownRanges[i:]...)
 			wz.knownRanges[i] = [2]string{start, end}
 		default:
-			panic(fmt.Sprintf("unexpected value, start=%s end=%s indexStart=%s indexEnd=%s prevStart=%s prevEnd=%s", start, end, indexStart, indexEnd, prevStart, prevEnd))
+			fmt.Printf("unexpected value, start=%s end=%s indexStart=%s indexEnd=%s prevStart=%s prevEnd=%s", start, end, indexStart, indexEnd, prevStart, prevEnd)
+			return false
 		}
 	}
 
@@ -232,7 +238,7 @@ func nsecWalkQuery(connCache connCache, msg dns.Msg, zd fieldData) walkZone {
 
 	for start, end, ok := wz.nextUnknownRange(); ok; start, end, ok = wz.nextUnknownRange() {
 		// fmt.Printf("looping, start=%s end=%s known=%v\n", start, end, wz.knownRanges)
-		if len(wz.knownRanges) == 1 && Compare(wz.knownRanges[0][0], wz.knownRanges[0][1]) == 0 {
+		if len(wz.knownRanges) == 1 && dns.Compare(wz.knownRanges[0][0], wz.knownRanges[0][1]) == 0 {
 			break
 		}
 		var expanded bool
@@ -261,7 +267,7 @@ func nsecWalkQuery(connCache connCache, msg dns.Msg, zd fieldData) walkZone {
 			for _, rr := range res.Ns {
 				switch rrT := rr.(type) {
 				case *dns.SOA:
-					if soaZone := strings.ToLower(rrT.Hdr.Name); Compare(zone, soaZone) != 0 && dns.IsSubDomain(zone, soaZone) {
+					if soaZone := strings.ToLower(rrT.Hdr.Name); dns.Compare(zone, soaZone) != 0 && dns.IsSubDomain(zone, soaZone) {
 						// fmt.Printf("found subdomain %s of domain %s\n", soaZone, zone)
 						wz.subdomains[soaZone] = true
 						foundSubdomains = true
@@ -431,18 +437,13 @@ func nop(data []string) []string {
 }
 
 func getMiddle(zone, start, end string) []string {
-	splitStart := dns.SplitDomainName(start)
-	if splitStart == nil {
-		panic(fmt.Sprintf("start splits to nil: %s", start))
-	}
-
-	if Compare(end, zone) == 0 {
+	if dns.Compare(end, zone) == 0 {
 		end = ""
 	}
 
 	var ret []string
 
-	if end != "" {
+	if !(end == "" || end == ".") {
 		splitEnd := dns.SplitDomainName(end)
 		if splitEnd == nil {
 			panic(fmt.Sprintf("end splits to nil: %s", end))
@@ -456,10 +457,17 @@ func getMiddle(zone, start, end string) []string {
 		}
 	}
 
-	for _, f := range []middleFunc{nop, minusAppended, minusSubdomains, minusSubdomain, incrementLabel} {
-		res := strings.Join(f(splitStart), ".") + "."
-		if dns.IsSubDomain(zone, res) && Compare(start, res) <= 0 && (end == "" || Compare(res, end) == -1) {
-			ret = append(ret, res)
+	if !(start == "" || start == ".") {
+		splitStart := dns.SplitDomainName(start)
+		if splitStart == nil {
+			panic(fmt.Sprintf("start splits to nil: %s", start))
+		}
+
+		for _, f := range []middleFunc{nop, minusAppended, minusSubdomains, minusSubdomain, incrementLabel} {
+			res := strings.Join(f(splitStart), ".") + "."
+			if dns.IsSubDomain(zone, res) && dns.Compare(start, res) <= 0 && (end == "" || dns.Compare(res, end) == -1) {
+				ret = append(ret, res)
+			}
 		}
 	}
 
@@ -467,77 +475,6 @@ func getMiddle(zone, start, end string) []string {
 }
 
 // TODO get Compare into miekg/dns
-
-// Compare compares domains according to the canonical ordering specified in RFC4034
-// returns an integer value similar to strcmp
-// (0 for equal values, -1 if s1 < s2, 1 if s1 > s2)
-func Compare(s1, s2 string) int {
-	s1b := []byte(s1)
-	s2b := []byte(s2)
-
-	doDDD(s1b)
-	doDDD(s2b)
-
-	s1lend := len(s1)
-	s2lend := len(s2)
-
-	for i := 0; ; i++ {
-		s1lstart, end1 := PrevLabel(s1, i)
-		s2lstart, end2 := PrevLabel(s2, i)
-
-		if end1 && end2 {
-			return 0
-		}
-
-		s1l := string(s1b[s1lstart:s1lend])
-		s2l := string(s2b[s2lstart:s2lend])
-
-		if cmp := labelCompare(s1l, s2l); cmp != 0 {
-			return cmp
-		}
-
-		s1lend = s1lstart - 1
-		s2lend = s2lstart - 1
-		if s1lend == -1 {
-			s1lend = 0
-		}
-		if s2lend == -1 {
-			s2lend = 0
-		}
-	}
-}
-
-func labelCompare(a, b string) int {
-	la := len(a)
-	lb := len(b)
-	minLen := la
-	if lb < la {
-		minLen = lb
-	}
-	for i := 0; i < minLen; i++ {
-		ai := a[i]
-		bi := b[i]
-		if ai >= 'A' && ai <= 'Z' {
-			ai |= 'a' - 'A'
-		}
-		if bi >= 'A' && bi <= 'Z' {
-			bi |= 'a' - 'A'
-		}
-		if ai != bi {
-			if ai > bi {
-				return 1
-			}
-			return -1
-		}
-	}
-
-	if la > lb {
-		return 1
-	} else if la < lb {
-		return -1
-	}
-	return 0
-}
 
 func doDDD(b []byte) {
 	lb := len(b)
@@ -550,45 +487,6 @@ func doDDD(b []byte) {
 			lb -= 3
 		}
 	}
-}
-
-// PrevLabel returns the index of the label when starting from the right and
-// jumping n labels to the left.
-// The bool start is true when the start of the string has been overshot.
-// Also see NextLabel.
-func PrevLabel(s string, n int) (i int, start bool) {
-	if s == "" {
-		return 0, true
-	}
-	if n == 0 {
-		return len(s), false
-	}
-
-	l := len(s) - 1
-	if s[l] == '.' {
-		l--
-	}
-
-	for ; l >= 0 && n > 0; l-- {
-		if s[l] != '.' {
-			continue
-		}
-		j := l - 1
-		for j >= 0 && s[j] == '\\' {
-			j--
-		}
-
-		if (j-l)%2 == 0 {
-			continue
-		}
-
-		n--
-		if n == 0 {
-			return l + 1, false
-		}
-	}
-
-	return 0, n > 1
 }
 
 func dddToByte(s []byte) byte {

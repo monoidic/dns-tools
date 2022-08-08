@@ -53,8 +53,7 @@ loop:
 		case dns.RcodeNameError: // nxdomain
 			registered = false
 			break loop
-		case dns.RcodeServerFailure:
-			break // ignore
+		case dns.RcodeServerFailure: // ignore
 		default:
 			fmt.Printf("regMapper 2: rcode %d\n", res.Rcode)
 		}
@@ -72,7 +71,7 @@ func detectUnregisteredDomains(db *sql.DB, zoneChan chan fieldData, wg *sync.Wai
 	netWriter(db, zoneChan, wg, tablesFields, namesStmts, regMapper, unregisteredWrite)
 }
 
-func unregisteredWrite(tableMap TableMap, stmtMap StmtMap, reg regStatus) {
+func unregisteredWrite(_ TableMap, stmtMap StmtMap, reg regStatus) {
 	stmtMap.exec("update", reg.registered, reg.id)
 }
 
@@ -82,13 +81,12 @@ func getUnregisteredDomains(db *sql.DB) {
 }
 
 func propagateUnreg(db *sql.DB) {
-	tx, err := db.Begin()
-	check(err)
+	tx := check1(db.Begin())
 
 	var numChanges int64 = 1
 
 	for numChanges != 0 {
-		_, err = tx.Exec(`
+		check1(tx.Exec(`
 			UPDATE name
 			SET registered=FALSE, reg_checked=TRUE
 			FROM name_parent
@@ -97,11 +95,9 @@ func propagateUnreg(db *sql.DB) {
 			WHERE parent.registered=FALSE
 			AND child.registered=TRUE
 			AND name.id=child.id
-		`)
-		check(err)
+		`))
 
-		rows, err := tx.Query("SELECT changes()")
-		check(err)
+		rows := check1(tx.Query("SELECT changes()"))
 		rows.Next()
 		check(rows.Scan(&numChanges))
 		check(rows.Close())
