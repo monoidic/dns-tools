@@ -15,7 +15,7 @@ type regStatus struct {
 	registered bool
 }
 
-func regMapper(zoneChan chan fieldData, outChan chan regStatus, wg *sync.WaitGroup, once *sync.Once) {
+func regMapper(zoneChan <-chan fieldData, outChan chan<- regStatus, wg *sync.WaitGroup, once *sync.Once) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -62,7 +62,7 @@ loop:
 	return regStatus{zone: zone, id: zd.id, registered: registered}
 }
 
-func detectUnregisteredDomains(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
+func detectUnregisteredDomains(db *sql.DB, zoneChan <-chan fieldData, wg *sync.WaitGroup) {
 	tablesFields := map[string]string{}
 	namesStmts := map[string]string{
 		"update": "UPDATE name SET reg_checked=TRUE, registered=? WHERE id=?",

@@ -79,25 +79,27 @@ func (wz *walkZone) addKnown(rr dns.NSEC) bool {
 		if lastKnown == "" {
 			// covered by wraparound
 			// fmt.Printf("=covered by wraparound, lastKnown=%s start=%s end=%s\n", lastKnown, start, end)
+			return true
 		} else if dns.Compare(start, lastKnown) == 1 { // no overlap, append
 			wz.knownRanges = append(wz.knownRanges, [2]string{start, end})
-		} else { // # merge (oldStart < newStart <= (oldEnd, newEnd)) into (oldStart < max(oldEnd, newEnd))
-			if dns.Compare(wz.knownRanges[l-1][0], start) != -1 {
-				fmt.Printf("assertion failure, merge last range %s < %s evaluated false, lastKnown=%s, knownRanges=%v", wz.knownRanges[l-1][0], start, lastKnown, wz.knownRanges)
-				return false
-			}
-			var newEnd string
-			if dns.Compare(end, zone) == 0 || dns.Compare(lastKnown, zone) == 0 {
-				newEnd = zone
-			} else {
-				if dns.Compare(end, lastKnown) == 1 {
-					newEnd = end
-				} else {
-					newEnd = lastKnown
-				}
-			}
-			wz.knownRanges[l-1][1] = newEnd
+			return true
 		}
+		// # merge (oldStart < newStart <= (oldEnd, newEnd)) into (oldStart < max(oldEnd, newEnd))
+		if dns.Compare(wz.knownRanges[l-1][0], start) != -1 {
+			fmt.Printf("assertion failure, merge last range %s < %s evaluated false, lastKnown=%s, knownRanges=%v", wz.knownRanges[l-1][0], start, lastKnown, wz.knownRanges)
+			return false
+		}
+		var newEnd string
+		if dns.Compare(end, zone) == 0 || dns.Compare(lastKnown, zone) == 0 {
+			newEnd = zone
+		} else {
+			if dns.Compare(end, lastKnown) == 1 {
+				newEnd = end
+			} else {
+				newEnd = lastKnown
+			}
+		}
+		wz.knownRanges[l-1][1] = newEnd
 		return true
 	} else if i == 0 { // prepend or merge with first
 		switch dns.Compare(end, wz.knownRanges[0][0]) {
@@ -212,7 +214,7 @@ func (wz *walkZone) nextUnknownRange() (string, string, bool) {
 	return "", "", false
 }
 
-func nsecWalkWorker(zoneChan chan fieldData, dataOutChan chan walkZone, wg *sync.WaitGroup, once *sync.Once) {
+func nsecWalkWorker(zoneChan <-chan fieldData, dataOutChan chan<- walkZone, wg *sync.WaitGroup, once *sync.Once) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -308,7 +310,7 @@ func nsecWalkQuery(connCache connCache, msg dns.Msg, zd fieldData) walkZone {
 	return wz
 }
 
-func nsecWalkMaster(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
+func nsecWalkMaster(db *sql.DB, zoneChan <-chan fieldData, wg *sync.WaitGroup) {
 	tablesFields := map[string]string{
 		"name":    "name",
 		"rr_type": "name",
@@ -328,7 +330,7 @@ func nsecWalkResults(db *sql.DB) {
 	readerWriter("fetching zone walk results", db, getUnqueriedNsecRes, nsecWalkResWriter)
 }
 
-func nsecWalkResWriter(db *sql.DB, inChan chan rrDBData, wg *sync.WaitGroup) {
+func nsecWalkResWriter(db *sql.DB, inChan <-chan rrDBData, wg *sync.WaitGroup) {
 	tablesFields := map[string]string{
 		"name":     "name",
 		"rr_type":  "name",

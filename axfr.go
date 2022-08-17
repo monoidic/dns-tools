@@ -17,7 +17,7 @@ import (
 // during big transfers???
 
 // check error? (don't retry with rcode Refused/FormatError/NotAuthoritative etc)
-func performAxfr(msg dns.Msg, rrDataChan chan rrData, ns string) error {
+func performAxfr(msg dns.Msg, rrDataChan chan<- rrData, ns string) error {
 	t := new(dns.Transfer)
 	msg.Id = dns.Id()
 	zone := msg.Question[0].Name
@@ -62,7 +62,7 @@ func performAxfr(msg dns.Msg, rrDataChan chan rrData, ns string) error {
 	return nil
 }
 
-func axfrWorker(zipChan chan zoneIP, rrDataChan chan rrData, readWg, wg *sync.WaitGroup, once *sync.Once) {
+func axfrWorker(zipChan <-chan zoneIP, rrDataChan chan<- rrData, readWg, wg *sync.WaitGroup, once *sync.Once) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode: dns.OpcodeQuery,
@@ -116,7 +116,7 @@ func axfrWorker(zipChan chan zoneIP, rrDataChan chan rrData, readWg, wg *sync.Wa
 	once.Do(func() { close(rrDataChan) })
 }
 
-func publicAxfrMaster(db *sql.DB, zipChan chan zoneIP, readWg *sync.WaitGroup) {
+func publicAxfrMaster(db *sql.DB, zipChan <-chan zoneIP, readWg *sync.WaitGroup) {
 	numProcs := 64
 
 	rrDataChan := make(chan rrData, BUFLEN)
@@ -135,7 +135,7 @@ func publicAxfrMaster(db *sql.DB, zipChan chan zoneIP, readWg *sync.WaitGroup) {
 	insertRRWorker(db, rrDataChan, &dummyWg)
 }
 
-func axfrWhitelist(inChan, outChan chan zoneIP, wg *sync.WaitGroup) {
+func axfrWhitelist(inChan <-chan zoneIP, outChan chan<- zoneIP, wg *sync.WaitGroup) {
 	for zip := range inChan {
 		if AxfrWhitelistedZoneSet[zip.zone.name] || AxfrWhitelistedIPSet[zip.ip.name] {
 			wg.Done()
@@ -147,7 +147,7 @@ func axfrWhitelist(inChan, outChan chan zoneIP, wg *sync.WaitGroup) {
 	close(outChan)
 }
 
-func axfrV4Only(inChan, outChan chan zoneIP, wg *sync.WaitGroup) {
+func axfrV4Only(inChan <-chan zoneIP, outChan chan<- zoneIP, wg *sync.WaitGroup) {
 	for zip := range inChan {
 		if !strings.Contains(zip.ip.name, ".") { // ipv6
 			wg.Done()

@@ -15,6 +15,13 @@ import (
 	"github.com/monoidic/dns"
 )
 
+type tableWorkerF[inType any, resultType any] func(inChan <-chan inType, outChan chan<- resultType, wg *sync.WaitGroup, tableMap TableMap, stmtMap StmtMap, once *sync.Once)
+type netWorkerF[inType any, resultType any] func(inChan <-chan inType, outChan chan<- resultType, wg *sync.WaitGroup, once *sync.Once)
+type insertF[resultType any] func(tableMap TableMap, stmtMap StmtMap, datum resultType)
+type readerF[inType any] func(db *sql.DB, inChan chan<- inType, wg *sync.WaitGroup)
+type writerF[inType any] func(db *sql.DB, inChan <-chan inType, wg *sync.WaitGroup)
+type processDataF[inType any, resultType any] func(c connCache, msg dns.Msg, fd inType) resultType
+
 type mxData struct {
 	data       []mxDatum
 	zoneID     int64
@@ -266,12 +273,11 @@ func cookieFetcher(protoCache *ttlcache.Cache[string, *dns.Conn], client *dns.Cl
 }
 
 func fetchCookie(msg dns.Msg, client *dns.Client, conn *dns.Conn) (cookie string, err error) {
-	res, _, err := client.ExchangeWithConn(&msg, conn)
-	if err != nil {
+	if res, _, err := client.ExchangeWithConn(&msg, conn); err == nil {
+		return cookieFromMsg(*res), nil
+	} else {
 		return "", err
 	}
-
-	return cookieFromMsg(*res), nil
 }
 
 func cookieFromMsg(msg dns.Msg) string {
@@ -350,7 +356,7 @@ func msgSetSize(msg *dns.Msg) {
 	opt.SetUDPSize(dns.DefaultMsgSize)
 }
 
-func resolverWorker[inType, resultType any](inChan chan inType, outChan chan resultType, msg dns.Msg, processData func(c connCache, msg dns.Msg, fd inType) resultType, wg *sync.WaitGroup, once *sync.Once) {
+func resolverWorker[inType, resultType any](inChan <-chan inType, outChan chan<- resultType, msg dns.Msg, processData processDataF[inType, resultType], wg *sync.WaitGroup, once *sync.Once) {
 	connCache := getConnCache()
 
 	// t := TIMEOUT
@@ -368,7 +374,7 @@ func resolverWorker[inType, resultType any](inChan chan inType, outChan chan res
 	once.Do(func() { close(outChan) })
 }
 
-func nsResolverWorker(inChan chan fieldData, outChan chan fdResults, wg *sync.WaitGroup, once *sync.Once) {
+func nsResolverWorker(inChan <-chan fieldData, outChan chan<- fdResults, wg *sync.WaitGroup, once *sync.Once) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -385,7 +391,7 @@ func nsResolverWorker(inChan chan fieldData, outChan chan fdResults, wg *sync.Wa
 	resolverWorker(inChan, outChan, msg, nsResolve, wg, once)
 }
 
-func mxResolverWorker(inChan chan fieldData, outChan chan mxData, wg *sync.WaitGroup, once *sync.Once) {
+func mxResolverWorker(inChan <-chan fieldData, outChan chan<- mxData, wg *sync.WaitGroup, once *sync.Once) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -402,7 +408,7 @@ func mxResolverWorker(inChan chan fieldData, outChan chan mxData, wg *sync.WaitG
 	resolverWorker(inChan, outChan, msg, mxResolve, wg, once)
 }
 
-func addrResolverWorker(inChan chan fieldData, outChan chan addrData, wg *sync.WaitGroup, once *sync.Once) {
+func addrResolverWorker(inChan <-chan fieldData, outChan chan<- addrData, wg *sync.WaitGroup, once *sync.Once) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -418,7 +424,7 @@ func addrResolverWorker(inChan chan fieldData, outChan chan addrData, wg *sync.W
 	resolverWorker(inChan, outChan, msg, addrResolve, wg, once)
 }
 
-func parentCheckWorker(inChan, outChan chan childParent, wg *sync.WaitGroup, tableMap TableMap, _ StmtMap, once *sync.Once) {
+func parentCheckWorker(inChan <-chan childParent, outChan chan<- childParent, wg *sync.WaitGroup, tableMap TableMap, _ StmtMap, once *sync.Once) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -439,7 +445,7 @@ func parentCheckWorker(inChan, outChan chan childParent, wg *sync.WaitGroup, tab
 }
 
 // bypass resolver if already in DB
-func parentCheckFilter(inChan, workerInChan chan childParent, tableMap TableMap) {
+func parentCheckFilter(inChan <-chan childParent, workerInChan chan<- childParent, tableMap TableMap) {
 	tableMap.wg.Add(1)
 	for cp := range inChan {
 		if cp.parentGuess == "" {
@@ -456,7 +462,7 @@ func parentCheckFilter(inChan, workerInChan chan childParent, tableMap TableMap)
 	tableMap.wg.Done()
 }
 
-func checkUpWorker(inChan, outChan chan checkUpData, wg *sync.WaitGroup, once *sync.Once) {
+func checkUpWorker(inChan <-chan checkUpData, outChan chan<- checkUpData, wg *sync.WaitGroup, once *sync.Once) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -473,7 +479,7 @@ func checkUpWorker(inChan, outChan chan checkUpData, wg *sync.WaitGroup, once *s
 	resolverWorker(inChan, outChan, msg, checkUpResolve, wg, once)
 }
 
-func rdnsWorker(inChan chan fieldData, outChan chan fdResults, wg *sync.WaitGroup, once *sync.Once) {
+func rdnsWorker(inChan <-chan fieldData, outChan chan<- fdResults, wg *sync.WaitGroup, once *sync.Once) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -490,7 +496,24 @@ func rdnsWorker(inChan chan fieldData, outChan chan fdResults, wg *sync.WaitGrou
 	resolverWorker(inChan, outChan, msg, rdnsResolve, wg, once)
 }
 
-func parentNSResolverWorker(inChan chan fdResults, outChan chan parentNSResults, wg *sync.WaitGroup, once *sync.Once) {
+func txtWorker(inChan <-chan fieldData, outChan chan<- fdResults, wg *sync.WaitGroup, once *sync.Once) {
+	msg := dns.Msg{
+		MsgHdr: dns.MsgHdr{
+			Opcode:           dns.OpcodeQuery,
+			RecursionDesired: true,
+			Rcode:            dns.RcodeSuccess,
+		},
+		Question: []dns.Question{{
+			Qclass: dns.ClassINET,
+			Qtype:  dns.TypeTXT,
+		}},
+	}
+	msgSetSize(&msg)
+
+	resolverWorker(inChan, outChan, msg, txtResolve, wg, once)
+}
+
+func parentNSResolverWorker(inChan <-chan fdResults, outChan chan<- parentNSResults, wg *sync.WaitGroup, once *sync.Once) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -507,7 +530,7 @@ func parentNSResolverWorker(inChan chan fdResults, outChan chan parentNSResults,
 	resolverWorker(inChan, outChan, msg, parentNsResolve, wg, once)
 }
 
-func nsecWalkResultResolver(inChan chan rrDBData, outChan chan nsecWalkResolveRes, wg *sync.WaitGroup, once *sync.Once) {
+func nsecWalkResultResolver(inChan <-chan rrDBData, outChan chan<- nsecWalkResolveRes, wg *sync.WaitGroup, once *sync.Once) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -523,7 +546,7 @@ func nsecWalkResultResolver(inChan chan rrDBData, outChan chan nsecWalkResolveRe
 	resolverWorker(inChan, outChan, msg, nsecWalkResultResolve, wg, once)
 }
 
-func nsecWalkResultResolve(connCache connCache, msg dns.Msg, rrD rrDBData) nsecWalkResolveRes {
+func nsecWalkResultResolve(connCache connCache, msg dns.Msg, rrD rrDBData) (res nsecWalkResolveRes) {
 	msg.Question[0].Name = rrD.rrName.name
 	msg.Question[0].Qtype = dns.StringToType[rrD.rrType.name]
 
@@ -538,11 +561,11 @@ func nsecWalkResultResolve(connCache connCache, msg dns.Msg, rrD rrDBData) nsecW
 		}
 	}
 
-	ret := nsecWalkResolveRes{rrDBData: rrD}
+	res.rrDBData = rrD
 
 	// TODO
 	if response == nil {
-		return ret
+		return res
 	}
 
 	rrL := make([]rrData, 0, len(response.Answer))
@@ -557,8 +580,8 @@ func nsecWalkResultResolve(connCache connCache, msg dns.Msg, rrD rrDBData) nsecW
 		rrL = append(rrL, resRRD)
 	}
 
-	ret.results = rrL
-	return ret
+	res.results = rrL
+	return res
 }
 
 func nsResolve(connCache connCache, msg dns.Msg, fd fieldData) fdResults {
@@ -573,11 +596,9 @@ func nsResolve(connCache connCache, msg dns.Msg, fd fieldData) fdResults {
 		if err == nil {
 			break
 		}
-		// fmt.Printf("nsResolve: %s\n", err)
 	}
 
 	if response != nil {
-		// fmt.Printf("nsResolve response: %#v\n", response)
 		for _, rr := range response.Answer {
 			switch rrT := rr.(type) {
 			case *dns.NS:
@@ -602,7 +623,6 @@ func mxResolve(connCache connCache, msg dns.Msg, fd fieldData) mxData {
 		if err == nil {
 			break
 		}
-		// fmt.Printf("mxResolve: %s\n", err)
 	}
 
 	if response != nil {
@@ -635,7 +655,6 @@ func addrResolve(connCache connCache, msg dns.Msg, fd fieldData) addrData {
 			if err == nil {
 				break
 			}
-			// fmt.Printf("addrResolve: %s\n", err)
 		}
 
 		if response != nil {
@@ -672,7 +691,6 @@ func parentCheckResolve(connCache connCache, msg dns.Msg, cp childParent) childP
 		if err == nil {
 			break
 		}
-		// fmt.Printf("parentCheckResolve: %s\n", err)
 	}
 
 	if err != nil {
@@ -712,7 +730,6 @@ func checkUpResolve(connCache connCache, msg dns.Msg, cu checkUpData) checkUpDat
 			cu.success = true
 			break
 		}
-		// fmt.Printf("checkUpResolve: %s\n", err)
 	}
 
 	return cu
@@ -730,7 +747,6 @@ func rdnsResolve(connCache connCache, msg dns.Msg, fd fieldData) fdResults {
 		if err == nil {
 			break
 		}
-		// fmt.Printf("rdnsResolve: %s\n", err)
 	}
 
 	if res != nil {
@@ -742,6 +758,31 @@ func rdnsResolve(connCache connCache, msg dns.Msg, fd fieldData) fdResults {
 		}
 	}
 
+	return fdResults{fieldData: fd, results: results}
+}
+
+func txtResolve(connCache connCache, msg dns.Msg, fd fieldData) fdResults {
+	msg.Question[0].Name = dns.Fqdn(fd.name)
+	var results []string
+	var res *dns.Msg
+
+	for i := 0; i < RETRIES; i++ {
+		var err error
+		nameserver := usedNs[rand.Intn(usedNsLen)]
+		res, err = plainResolve(msg, connCache, nameserver)
+		if err == nil {
+			break
+		}
+	}
+
+	if res != nil {
+		for _, rr := range res.Answer {
+			switch rrT := rr.(type) {
+			case *dns.TXT:
+				results = append(results, rrT.Txt...)
+			}
+		}
+	}
 	return fdResults{fieldData: fd, results: results}
 }
 
@@ -760,7 +801,6 @@ func parentNsResolve(connCache connCache, msg dns.Msg, fdr fdResults) parentNSRe
 				if err == nil {
 					break parentNsResolveOuterLoop
 				}
-				// fmt.Printf("parentNSResolve: %s\n", err)
 			}
 		}
 
@@ -786,7 +826,7 @@ func parentNsResolve(connCache connCache, msg dns.Msg, fdr fdResults) parentNSRe
 	return parentNSResults{fieldData: fdr.fieldData, nsEntries: nsResults, ipEntries: ipResults}
 }
 
-func netWriterTable[inType any, resultType any](db *sql.DB, inChan chan inType, wg *sync.WaitGroup, tablesFields, namesStmts map[string]string, workerF func(inChan chan inType, outChan chan resultType, wg *sync.WaitGroup, tableMap TableMap, stmtMap StmtMap, once *sync.Once), insertF func(tableMap TableMap, stmtMap StmtMap, datum resultType)) {
+func netWriterTable[inType any, resultType any](db *sql.DB, inChan <-chan inType, wg *sync.WaitGroup, tablesFields, namesStmts map[string]string, workerF tableWorkerF[inType, resultType], insertF insertF[resultType]) {
 	numProcs := 64
 
 	dataOutChan := make(chan resultType, BUFLEN)
@@ -819,8 +859,8 @@ func netWriterTable[inType any, resultType any](db *sql.DB, inChan chan inType, 
 			tableMap.update(tx)
 			stmtMap.update(tx)
 
-			tableMap.mx.Unlock()
 			stmtMap.mx.Unlock()
+			tableMap.mx.Unlock()
 		}
 		i--
 
@@ -833,13 +873,13 @@ func netWriterTable[inType any, resultType any](db *sql.DB, inChan chan inType, 
 	check(tx.Commit())
 }
 
-func netWriter[inType any, resultType any](db *sql.DB, inChan chan inType, wg *sync.WaitGroup, tablesFields, namesStmts map[string]string, workerF func(inChan chan inType, outChan chan resultType, wg *sync.WaitGroup, once *sync.Once), insertF func(tableMap TableMap, stmtMap StmtMap, datum resultType)) {
-	netWriterTable(db, inChan, wg, tablesFields, namesStmts, func(inChan chan inType, outChan chan resultType, wg *sync.WaitGroup, _ TableMap, _ StmtMap, once *sync.Once) {
+func netWriter[inType any, resultType any](db *sql.DB, inChan <-chan inType, wg *sync.WaitGroup, tablesFields, namesStmts map[string]string, workerF netWorkerF[inType, resultType], insertF insertF[resultType]) {
+	netWriterTable(db, inChan, wg, tablesFields, namesStmts, func(inChan <-chan inType, outChan chan<- resultType, wg *sync.WaitGroup, _ TableMap, _ StmtMap, once *sync.Once) {
 		workerF(inChan, outChan, wg, once)
 	}, insertF)
 }
 
-func netNSWriter(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
+func netNSWriter(db *sql.DB, zoneChan <-chan fieldData, wg *sync.WaitGroup) {
 	tablesFields := map[string]string{
 		"name": "name",
 	}
@@ -854,7 +894,7 @@ func netNSWriter(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
 	netWriter(db, zoneChan, wg, tablesFields, namesStmts, nsResolverWorker, nsWrite)
 }
 
-func netIPWriter(db *sql.DB, nameChan chan fieldData, wg *sync.WaitGroup) {
+func netIPWriter(db *sql.DB, nameChan <-chan fieldData, wg *sync.WaitGroup) {
 	tablesFields := map[string]string{
 		"ip":   "address",
 		"name": "name",
@@ -871,7 +911,7 @@ func netIPWriter(db *sql.DB, nameChan chan fieldData, wg *sync.WaitGroup) {
 	netWriter(db, nameChan, wg, tablesFields, namesStmts, addrResolverWorker, ipWrite)
 }
 
-func mxWriter(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
+func mxWriter(db *sql.DB, zoneChan <-chan fieldData, wg *sync.WaitGroup) {
 	tablesFields := map[string]string{
 		"name": "name",
 	}
@@ -884,7 +924,7 @@ func mxWriter(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
 	netWriter(db, zoneChan, wg, tablesFields, namesStmts, mxResolverWorker, mxWrite)
 }
 
-func checkUpWriter(db *sql.DB, checkChan chan checkUpData, wg *sync.WaitGroup) {
+func checkUpWriter(db *sql.DB, checkChan <-chan checkUpData, wg *sync.WaitGroup) {
 	tablesFields := map[string]string{}
 	namesStmts := map[string]string{
 		"update": "UPDATE ip SET responsive=? WHERE id=?",
@@ -893,7 +933,7 @@ func checkUpWriter(db *sql.DB, checkChan chan checkUpData, wg *sync.WaitGroup) {
 	netWriter(db, checkChan, wg, tablesFields, namesStmts, checkUpWorker, checkUpWrite)
 }
 
-func rndsWriter(db *sql.DB, ipChan chan fieldData, wg *sync.WaitGroup) {
+func rdnsWriter(db *sql.DB, ipChan <-chan fieldData, wg *sync.WaitGroup) {
 	tablesFields := map[string]string{
 		"ip":   "address",
 		"name": "name",
@@ -905,6 +945,47 @@ func rndsWriter(db *sql.DB, ipChan chan fieldData, wg *sync.WaitGroup) {
 	}
 
 	netWriter(db, ipChan, wg, tablesFields, namesStmts, rdnsWorker, rdnsWrite)
+}
+
+func spfRRWriter(db *sql.DB, fdChan <-chan fieldData, wg *sync.WaitGroup) {
+	tablesFields := map[string]string{
+		"name":       "name",
+		"spf_record": "value",
+	}
+	namesStmts := map[string]string{
+		"spf":         "INSERT OR IGNORE INTO spf (name_id, spf_record_id) VALUES (?, ?)",
+		"spfname":     "INSERT OR IGNORE INTO spf_name (name_id, spf_id, spfname) VALUES (?, (SELECT id FROM spf WHERE name_id=? AND spf_record_id=?), ?)",
+		"txt_tried":   "UPDATE name SET txt_tried=TRUE WHERE id=?",
+		"invalid_spf": "UPDATE spf SET valid=FALSE WHERE name_id=? AND spf_record_id=?",
+	}
+
+	netWriter(db, fdChan, wg, tablesFields, namesStmts, txtWorker, spfWrite)
+}
+
+func spfWrite(tableMap TableMap, stmtMap StmtMap, fdr fdResults) {
+	nameID := fdr.id
+
+	for _, s := range fdr.results {
+		if strings.HasPrefix(s, "v=spf1") {
+			recordID := tableMap.get("spf_record", s)
+			stmtMap.exec("spf", nameID, recordID)
+
+			if data, err := parseSPF([]byte(s)); err == nil {
+				for _, name := range data.names {
+					spfNameID := tableMap.get("name", name)
+					stmtMap.exec("spfname", spfNameID, nameID, recordID, false)
+				}
+				for _, name := range data.spfNames {
+					spfNameID := tableMap.get("name", name)
+					stmtMap.exec("spfname", spfNameID, nameID, recordID, true)
+				}
+			} else {
+				stmtMap.exec("invalid_spf", nameID, recordID)
+			}
+		}
+	}
+
+	stmtMap.exec("txt_tried", nameID)
 }
 
 func rdnsWrite(tableMap TableMap, stmtMap StmtMap, fdr fdResults) {
@@ -983,18 +1064,22 @@ func checkUpWrite(_ TableMap, stmtMap StmtMap, cu checkUpData) {
 	stmtMap.exec("update", cu.success, cu.ipID)
 }
 
-func checkUpReader(db *sql.DB, checkChan chan checkUpData, wg *sync.WaitGroup) {
+func checkUpReader(db *sql.DB, checkChan chan<- checkUpData, wg *sync.WaitGroup) {
 	// each NS IP and one zone it is meant to serve
 	tx := check1(db.Begin())
-	rows := check1(tx.Query(`
+	var v4Filter string
+	if !v6 {
+		v4Filter = `AND ip.address LIKE '%.%'`
+	}
+	rows := check1(tx.Query(fmt.Sprintf(`
 		SELECT DISTINCT ip.address, zone.name, ip.id
 		FROM zone_ns
 		INNER JOIN name AS zone ON zone_ns.zone_id = zone.id
 		INNER JOIN name_ip ON name_ip.name_id = zone_ns.ns_id
 		INNER JOIN ip ON name_ip.ip_id = ip.id
-		WHERE ip.address LIKE '%.%' AND ip.resp_checked=FALSE AND zone.is_zone=TRUE
+		WHERE ip.resp_checked=FALSE AND zone.is_zone=TRUE %s
 		GROUP BY ip.id
-	`))
+	`, v4Filter)))
 
 	for rows.Next() {
 		var ip, zone string
@@ -1014,7 +1099,7 @@ func checkUpReader(db *sql.DB, checkChan chan checkUpData, wg *sync.WaitGroup) {
 	close(checkChan)
 }
 
-func zoneIPReader(db *sql.DB, zipChan chan zoneIP, wg *sync.WaitGroup, extraFilter string) {
+func zoneIPReader(db *sql.DB, zipChan chan<- zoneIP, wg *sync.WaitGroup, extraFilter string) {
 	qs := fmt.Sprintf(`
 		SELECT DISTINCT zone.name, ip.address, zone.id, ip.id
 		FROM zone_ns
@@ -1041,18 +1126,17 @@ func zoneIPReader(db *sql.DB, zipChan chan zoneIP, wg *sync.WaitGroup, extraFilt
 	close(zipChan)
 }
 
-func nsIPAdderWorker(db *sql.DB, zoneChan chan fieldData, withNSChan chan fdResults) {
+func nsIPAdderWorker(db *sql.DB, zoneChan <-chan fieldData, withNSChan chan<- fdResults) {
 	tx := check1(db.Begin())
 
 	nsCache := getFDCache(`
 		SELECT DISTINCT ip.address || ':53', ip.id
-		FROM name AS zone
-		INNER JOIN zone_tld ON zone_tld.zone_id = zone.id
-		INNER JOIN name AS tld ON zone_tld.tld_id = tld.id
-		INNER JOIN zone_ns ON zone_ns.zone_id = tld.id
+		FROM name AS child
+		INNER JOIN name_parent ON name_parent.child_id = child.id
+		INNER JOIN zone_ns ON zone_ns.zone_id = name_parent.parent_id
 		INNER JOIN name_ip ON zone_ns.ns_id = name_ip.name_id
 		INNER JOIN ip ON name_ip.ip_id = ip.id
-		WHERE zone.name=?
+		WHERE child.name=?
 	`, tx)
 
 	for zd := range zoneChan {
@@ -1064,7 +1148,7 @@ func nsIPAdderWorker(db *sql.DB, zoneChan chan fieldData, withNSChan chan fdResu
 	check(tx.Commit())
 }
 
-func parentNSWriter(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
+func parentNSWriter(db *sql.DB, zoneChan <-chan fieldData, wg *sync.WaitGroup) {
 	tablesFields := map[string]string{
 		"name": "name",
 		"ip":   "address",
@@ -1111,7 +1195,7 @@ func parentNSWrite(tableMap TableMap, stmtMap StmtMap, nsr parentNSResults) {
 	stmtMap.exec("fetched", zoneID)
 }
 
-func readerWriter[inType any](msg string, db *sql.DB, readerF func(db *sql.DB, inChan chan inType, wg *sync.WaitGroup), writerF func(db *sql.DB, inChan chan inType, wg *sync.WaitGroup)) {
+func readerWriter[inType any](msg string, db *sql.DB, readerF readerF[inType], writerF writerF[inType]) {
 	fmt.Println(msg)
 
 	var wg sync.WaitGroup
@@ -1121,16 +1205,18 @@ func readerWriter[inType any](msg string, db *sql.DB, readerF func(db *sql.DB, i
 	writerF(db, inChan, &wg)
 }
 
+func netZoneReaderGen(filter string) func(*sql.DB, chan<- fieldData, *sync.WaitGroup) {
+	return func(db *sql.DB, zoneChan chan<- fieldData, wg *sync.WaitGroup) {
+		netZoneReader(db, zoneChan, wg, filter)
+	}
+}
+
 func resolveMX(db *sql.DB) {
-	readerWriter("resolving zone MX records", db, func(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
-		netZoneReader(db, zoneChan, wg, "AND zone.mx_resolved=FALSE")
-	}, mxWriter)
+	readerWriter("resolving zone MX records", db, netZoneReaderGen("AND zone.mx_resolved=FALSE"), mxWriter)
 }
 
 func netNS(db *sql.DB) {
-	readerWriter("Adding zone NS mappings from the internet", db, func(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
-		netZoneReader(db, zoneChan, wg, "AND zone.ns_resolved=FALSE")
-	}, netNSWriter)
+	readerWriter("Adding zone NS mappings from the internet", db, netZoneReaderGen("AND zone.ns_resolved=FALSE"), netNSWriter)
 }
 
 func netIP(db *sql.DB) {
@@ -1142,11 +1228,22 @@ func checkUp(db *sql.DB) {
 }
 
 func getParentNS(db *sql.DB) {
-	readerWriter("getting NS records from parent zone", db, func(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
-		netZoneReader(db, zoneChan, wg, "AND glue_ns=FALSE")
-	}, parentNSWriter)
+	var v4Filter string
+	if !v6 {
+		v4Filter = `AND ip.address LIKE '%.%'`
+	}
+	filter := fmt.Sprintf("AND glue_ns=FALSE %s", v4Filter)
+	readerWriter("getting NS records from parent zone", db, netZoneReaderGen(filter), parentNSWriter)
 }
 
 func rdns(db *sql.DB) {
-	readerWriter("getting rDNS results for IPs", db, rdnsIPReader, rndsWriter)
+	readerWriter("getting rDNS results for IPs", db, rdnsIPReader, rdnsWriter)
+}
+
+func spf(db *sql.DB) {
+	readerWriter("getting potential SPF records", db, getUnqueriedSPF, spfRRWriter)
+}
+
+func spfLinks(db *sql.DB) {
+	readerWriter("getting linked SPF records", db, getUnqueriedSPFName, spfRRWriter)
 }

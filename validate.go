@@ -14,7 +14,7 @@ import (
 type tldStatus uint8
 
 const (
-	icannTLD tldStatus = iota
+	icannTLD tldStatus = iota + 1
 	privateTLD
 	invalidTLD
 	selfTLD
@@ -25,7 +25,7 @@ type zoneValid struct {
 	status    tldStatus
 }
 
-func validMapper(zoneChan chan fieldData, outChan chan zoneValid, wg *sync.WaitGroup, once *sync.Once) {
+func validMapper(zoneChan <-chan fieldData, outChan chan<- zoneValid, wg *sync.WaitGroup, once *sync.Once) {
 	for zd := range zoneChan {
 		if zd.name == "." {
 			outChan <- zoneValid{fieldData: zd, status: icannTLD}
@@ -55,7 +55,7 @@ func validMapper(zoneChan chan fieldData, outChan chan zoneValid, wg *sync.WaitG
 	once.Do(func() { close(outChan) })
 }
 
-func validWriter(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
+func validWriter(db *sql.DB, zoneChan <-chan fieldData, wg *sync.WaitGroup) {
 	tablesFields := map[string]string{
 		"name": "name",
 	}
@@ -78,7 +78,7 @@ func validInsert(_ TableMap, stmtMap StmtMap, zv zoneValid) {
 	stmtMap.exec("validation", valid, zv.id)
 }
 
-func getTLDs(_ *sql.DB, tldChan chan string, wg *sync.WaitGroup) {
+func getTLDs(_ *sql.DB, tldChan chan<- string, wg *sync.WaitGroup) {
 	fp := check1(os.Open("lists/tld.txt"))
 
 	scanner := bufio.NewScanner(fp)
@@ -102,7 +102,7 @@ func getTLDs(_ *sql.DB, tldChan chan string, wg *sync.WaitGroup) {
 	close(tldChan)
 }
 
-func tldListWriter(db *sql.DB, tldChan chan string, wg *sync.WaitGroup) {
+func tldListWriter(db *sql.DB, tldChan <-chan string, wg *sync.WaitGroup) {
 	tablesFields := map[string]string{
 		"name": "name",
 	}

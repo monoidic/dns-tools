@@ -11,7 +11,7 @@ import (
 	"github.com/monoidic/dns"
 )
 
-func readDomainLists(fileChan, domainChan chan string, wg *sync.WaitGroup) {
+func readDomainLists(fileChan <-chan string, domainChan chan<- string, wg *sync.WaitGroup) {
 	for filename := range fileChan {
 		fp := check1(os.Open(filename))
 
@@ -28,7 +28,7 @@ func readDomainLists(fileChan, domainChan chan string, wg *sync.WaitGroup) {
 	}
 }
 
-func insertDomainWorker(db *sql.DB, domainChan chan string, wg *sync.WaitGroup) {
+func insertDomainWorker(db *sql.DB, domainChan <-chan string, wg *sync.WaitGroup) {
 	tablesFields := map[string]string{
 		"name": "name",
 	}
@@ -93,9 +93,7 @@ func parseDomainLists(db *sql.DB) {
 
 	wg.Add(len(matches))
 
-	numProcs := NUMPROCS
-
-	for i := 0; i < numProcs; i++ {
+	for i := 0; i < NUMPROCS; i++ {
 		go readDomainLists(fileChan, domainChan, &wg)
 	}
 

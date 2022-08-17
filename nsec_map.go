@@ -129,7 +129,7 @@ func getNsecState(nsec3param string, nsecSigs []dns.NSEC, nsec3Sigs []*dns.NSEC3
 	}
 }
 
-func checkNsecWorker(inChan chan fieldData, outChan chan fdResults, wg *sync.WaitGroup, once *sync.Once) {
+func checkNsecWorker(inChan <-chan fieldData, outChan chan<- fdResults, wg *sync.WaitGroup, once *sync.Once) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -255,7 +255,7 @@ soaLoop:
 	return fdResults{fieldData: fd, results: []string{nsecState, rname, mname, nsecS}}
 }
 
-func checkNsecMaster(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
+func checkNsecMaster(db *sql.DB, zoneChan <-chan fieldData, wg *sync.WaitGroup) {
 	tablesFields := map[string]string{
 		"nsec_state": "name",
 		"rname":      "name",

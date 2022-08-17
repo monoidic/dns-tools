@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"fmt"
 	"net/netip"
 	"regexp"
 	"strconv"
@@ -115,20 +114,17 @@ type spfModifier struct {
 	isMacroName bool
 }
 
-func parseSPF(txt []byte) (spfData, error) {
-	ret := spfData{}
+func parseSPF(txt []byte) (ret spfData, err error) {
 	matches := patternRecord.FindSubmatch(txt)
 	if matches == nil {
 		return ret, Error{s: "invalid SPF record, unable to find version v=spf1 at beginning"}
 	}
 
-	err := ret.parseTerms(matches[patternRecordMap["terms"]])
-	if err != nil {
+	if err = ret.parseTerms(matches[patternRecordMap["terms"]]); err != nil {
 		return spfData{}, err
 	}
 
-	err = ret.extractData()
-	if err != nil {
+	if err = ret.extractData(); err != nil {
 		return spfData{}, err
 	}
 
@@ -182,16 +178,15 @@ func macroToConstantDomain(macro string) (constant string, ok bool) {
 	return macro[constSectionStart+1:], true
 }
 
-func (spf *spfData) parseTerms(txt []byte) error {
+func (spf *spfData) parseTerms(txt []byte) (err error) {
 	for _, field := range bytes.Fields(txt) {
-		parsed, err := spf.tryParseDirective(field)
-		if err != nil {
+		var parsed bool
+		if parsed, err = spf.tryParseDirective(field); err != nil {
 			return err
 		}
 
 		if !parsed {
-			err = spf.parseModifier(field)
-			if err != nil {
+			if err = spf.parseModifier(field); err != nil {
 				return err
 			}
 		}
@@ -211,8 +206,6 @@ func (spf *spfData) tryParseDirective(txt []byte) (parsed bool, err error) {
 	qualifier := directiveParts[patternDirectiveMap["qualifier"]]
 	mechanism := directiveParts[patternDirectiveMap["mechanism"]]
 	remainder := directiveParts[patternDirectiveMap["remainder"]]
-
-	fmt.Printf("%q %q %q %q\n", directive, qualifier, mechanism, remainder)
 
 	if err = spf.parseDirective(qualifier, mechanism, remainder); err != nil {
 		return false, err
@@ -261,8 +254,7 @@ func (spf *spfData) parseDirective(qualifierB, mechanismB, remainderB []byte) (e
 			directive.name = dns.Fqdn(string(domainNet))
 		}
 	case spfMechanismIp4, spfMechanismIp6:
-		directive.address, err = netip.ParseAddr(string(domainNet))
-		if err != nil {
+		if directive.address, err = netip.ParseAddr(string(domainNet)); err != nil {
 			return err
 		}
 		var matchingType bool
@@ -288,15 +280,13 @@ func (spf *spfData) parseDirective(qualifierB, mechanismB, remainderB []byte) (e
 			}
 
 			if v4cidr := matches[patternDualCidrMap["v4cidr"]]; len(v4cidr) > 0 {
-				directive.v4cidr, err = parseCidrNum(v4cidr)
-				if err != nil {
+				if directive.v4cidr, err = parseCidrNum(v4cidr); err != nil {
 					return err
 				}
 				directive.hasV4Cidr = true
 			}
 			if v6cidr := matches[patternDualCidrMap["v4cidr"]]; len(v6cidr) > 0 {
-				directive.v6cidr, err = parseCidrNum(v6cidr)
-				if err != nil {
+				if directive.v6cidr, err = parseCidrNum(v6cidr); err != nil {
 					return err
 				}
 				directive.hasV6Cidr = true
@@ -305,8 +295,7 @@ func (spf *spfData) parseDirective(qualifierB, mechanismB, remainderB []byte) (e
 			if !patternIPv4CIDR.Match(cidr) {
 				return Error{s: "invalid ip4 cidr"}
 			}
-			directive.v4cidr, err = parseCidrNum(cidr)
-			if err != nil {
+			if directive.v4cidr, err = parseCidrNum(cidr); err != nil {
 				return err
 			}
 			directive.hasV4Cidr = true
@@ -314,8 +303,7 @@ func (spf *spfData) parseDirective(qualifierB, mechanismB, remainderB []byte) (e
 			if !patternIPv6CIDR.Match(cidr) {
 				return Error{s: "invalid ip6 cidr"}
 			}
-			directive.v6cidr, err = parseCidrNum(cidr)
-			if err != nil {
+			if directive.v6cidr, err = parseCidrNum(cidr); err != nil {
 				return err
 			}
 			directive.hasV6Cidr = true
@@ -382,11 +370,11 @@ func getPatternNameMap(pattern *regexp.Regexp) map[string]int {
 }
 
 func parseCidrNum(b []byte) (uint8, error) {
-	num, err := strconv.ParseUint(string(b[1:]), 10, 8)
-	if err != nil {
+	if unum, err := strconv.ParseUint(string(b[1:]), 10, 8); err == nil {
+		return uint8(unum), nil
+	} else {
 		return 0, err
 	}
-	return uint8(num), nil
 }
 
 func compileExactMatch(pattern string) *regexp.Regexp {

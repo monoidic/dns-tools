@@ -25,7 +25,7 @@ func (entry rangerEntry) Network() net.IPNet {
 
 // 2^24 + 2^16 + 2^8 addresses
 // 239 * (2^16) + 239 * 2^8 + 239 addresses
-func generateInAddr(zoneChan chan string, wg *sync.WaitGroup) {
+func generateInAddr(zoneChan chan<- string, wg *sync.WaitGroup) {
 	// for a := 0; a < 256; a++ {
 	for a := 1; a < 240; a++ {
 		addrA := fmt.Sprintf("%d.in-addr.arpa.", a)
@@ -46,7 +46,7 @@ func generateInAddr(zoneChan chan string, wg *sync.WaitGroup) {
 	close(zoneChan)
 }
 
-func generateInAddrNets(zoneChan chan string, wg *sync.WaitGroup, netsFile, cc string) {
+func generateInAddrNets(zoneChan chan<- string, wg *sync.WaitGroup, netsFile, cc string) {
 	fd := check1(os.Open(netsFile))
 
 	scanner := bufio.NewScanner(fd)
@@ -109,7 +109,7 @@ func generateInAddrNets(zoneChan chan string, wg *sync.WaitGroup, netsFile, cc s
 	check(fd.Close())
 }
 
-func inAddrWorker(zoneChan chan string, outChan chan inAddrData, wg *sync.WaitGroup, once *sync.Once) {
+func inAddrWorker(zoneChan <-chan string, outChan chan<- inAddrData, wg *sync.WaitGroup, once *sync.Once) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -153,7 +153,7 @@ func inAddrResolve(connCache connCache, msg dns.Msg, zone string) inAddrData {
 	return inAddrData{zone: zone, NSes: NSes}
 }
 
-func inAddrWriter(db *sql.DB, zoneChan chan string, wg *sync.WaitGroup) {
+func inAddrWriter(db *sql.DB, zoneChan <-chan string, wg *sync.WaitGroup) {
 	tablesFields := map[string]string{
 		"name": "name",
 	}

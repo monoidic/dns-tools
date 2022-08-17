@@ -4,13 +4,14 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
+	"log"
 	"math/rand"
 	"os"
 	"runtime"
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 const (
@@ -33,8 +34,7 @@ var (
 
 func check(err error) {
 	if err != nil {
-		fmt.Printf("%T %#v\n", err, err)
-		panic(err)
+		log.Panicf("%T %[1]v", err)
 	}
 }
 
@@ -75,11 +75,22 @@ var flags = map[string]*flagData{
 	"psl":               {description: "insert TLDs from PSL", function: insertPSL},
 	"rdns":              {description: "perform rDNS queries on all saved IP addresses", function: rdns},
 	"validate":          {description: "check if zones are valid", function: validateZones},
+	"spf":               {description: "attempt to fetch SPF records", function: spf},
+	"spf_links":         {description: "attempt to fetch linked SPF records", function: spfLinks},
 }
 
 var (
-	flagOrder      = []string{"parse", "parse_lists", "in_addr", "rr_ns", "rr_mx", "rr_ip", "net_ns", "net_mx", "net_ip", "rdns", "check_up", "nsec_map", "zone_walk", "zone_walk_results", "axfr", "psl", "validate", "parent_map", "parent_ns", "unregistered"}
-	publicDnsFlags = []string{"in_addr", "net_ns", "net_mx", "net_ip", "nsec_map", "zone_walk", "unregistered", "rdns", "zone_walk_results"}
+	flagOrder = []string{
+		"parse", "parse_lists",
+		"in_addr",
+		"rr_ns", "rr_mx", "rr_ip",
+		"net_ns", "net_mx", "net_ip",
+		"rdns", "check_up",
+		"nsec_map", "zone_walk", "zone_walk_results",
+		"axfr", "psl", "validate", "parent_map", "parent_ns",
+		"unregistered", "spf", "spf_links",
+	}
+	publicDnsFlags = []string{"in_addr", "net_ip", "net_mx", "net_ns", "nsec_map", "rdns", "spf", "spf_links", "unregistered", "zone_walk", "zone_walk_results"}
 	directConns    = []string{"axfr", "check_up", "parent_ns"}
 )
 
@@ -131,14 +142,14 @@ func main() {
 	readConfig()
 	netCC = strings.ToUpper(netCC)
 
-	connstring := fmt.Sprintf("file:%s?_pragma=journal_mode=WAL&mode=rwc", dbName)
-	db := check1(sql.Open("sqlite", connstring))
+	connstring := fmt.Sprintf("file:%s?_journal_mode=WAL&mode=rwc", dbName)
+	db := check1(sql.Open("sqlite3", connstring))
 
 	initDb(db)
 
 	for _, key := range publicDnsFlags {
 		if flags[key].doAction {
-			// randomize ns (no security needed)
+			// randomize ns (no cryptographically secure seed/random numbers needed)
 			rand.Seed(time.Now().UnixNano())
 			break
 		}

@@ -44,7 +44,7 @@ func mapZoneParents(db *sql.DB) {
 	readerWriter("mapping zone parents", db, getParentCheck, parentCheck)
 }
 
-func parentCheck(db *sql.DB, inChan chan fieldData, wg *sync.WaitGroup) {
+func parentCheck(db *sql.DB, inChan <-chan fieldData, wg *sync.WaitGroup) {
 	tablesFields := map[string]string{
 		"name": "name",
 	}
@@ -62,7 +62,7 @@ func parentCheck(db *sql.DB, inChan chan fieldData, wg *sync.WaitGroup) {
 	netWriterTable(db, cpChan, wg, tablesFields, namesStmts, parentCheckWorker, parentCheckWriter)
 }
 
-func addChildParent(inChan chan fieldData, outChan chan childParent) {
+func addChildParent(inChan <-chan fieldData, outChan chan<- childParent) {
 	for fd := range inChan {
 		cp := childParent{child: fd}
 

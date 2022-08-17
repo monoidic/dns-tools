@@ -10,6 +10,8 @@ import (
 	"github.com/monoidic/dns"
 )
 
+type rrF[rrType any] func(tableMap TableMap, stmtMap StmtMap, rrD rrType)
+
 var initStmts = []string{
 	`
 	CREATE TABLE IF NOT EXISTS name
@@ -29,6 +31,7 @@ var initStmts = []string{
 		ns_resolved   INTEGER NOT NULL DEFAULT FALSE,
 		glue_ns       INTEGER NOT NULL DEFAULT FALSE, -- for zones; glue NS has been fetched from parent zone
 		addr_resolved INTEGER NOT NULL DEFAULT FALSE,
+		txt_tried     INTEGER NOT NULL DEFAULT FALSE, -- currently for SPF
 		axfr_tried    INTEGER NOT NULL DEFAULT FALSE,
 		valid         INTEGER NOT NULL DEFAULT TRUE,  -- has valid parent zone chain/TLD
 		valid_tried   INTEGER NOT NULL DEFAULT FALSE, -- validation has been verified
@@ -112,6 +115,33 @@ var initStmts = []string{
 		zone_id   INTEGER NOT NULL REFERENCES name(id),
 		scan_time INTEGER NOT NULL DEFAULT 0,
 		UNIQUE(ip_id, zone_id)
+	)
+	`,
+	`
+	CREATE TABLE IF NOT EXISTS spf
+	(
+		id             INTEGER PRIMARY KEY,
+		name_id        INTEGER NOT NULL REFERENCES name(id),
+		spf_record_id  TEXT NOT NULL REFERENCES spf_record(id),
+		valid          INTEGER NOT NULL DEFAULT TRUE,
+		UNIQUE(name_id, spf_record_id)
+	)
+	`,
+	`
+	CREATE TABLE IF NOT EXISTS spf_record
+	(
+		id    INTEGER PRIMARY KEY,
+		value TEXT UNIQUE NOT NULL
+	)
+	`,
+	`
+	CREATE TABLE IF NOT EXISTS spf_name -- for DNS names scraped from the SPF record
+	(
+		id          INTEGER PRIMARY KEY,
+		spf_id      INTEGER NOT NULL REFERENCES spf(id),
+		name_id     INTEGER NOT NULL REFERENCES name(id),
+		spfname     INTEGER NOT NULL, -- bool, indicates names with additional spf records to fetch
+		UNIQUE(spf_id, name_id)
 	)
 	`,
 	`
@@ -222,7 +252,7 @@ type stmtData struct {
 type msgtype uint8
 
 const (
-	rrDataRegular msgtype = iota
+	rrDataRegular msgtype = iota + 1
 	rrDataZoneDone
 	rrDataZoneAxfrEnd
 	rrDataZoneAxfrTry
@@ -523,7 +553,7 @@ func createROGetF(tx *sql.Tx, tableName string, valueName string) (ttlcache.Opti
 	return cacheF, cleanupF
 }
 
-func insertRRWorker(db *sql.DB, rrDataChan chan rrData, wg *sync.WaitGroup) {
+func insertRRWorker(db *sql.DB, rrDataChan <-chan rrData, wg *sync.WaitGroup) {
 	tablesFields := map[string]string{
 		"name":     "name",
 		"rr_type":  "name",
@@ -605,7 +635,7 @@ func insertRRWorker(db *sql.DB, rrDataChan chan rrData, wg *sync.WaitGroup) {
 	wg.Done()
 }
 
-func insertNSRR(db *sql.DB, rrChan chan rrDBData, wg *sync.WaitGroup) {
+func insertNSRR(db *sql.DB, rrChan <-chan rrDBData, wg *sync.WaitGroup) {
 	tablesFields := map[string]string{
 		"name": "name",
 	}
@@ -622,7 +652,7 @@ func insertNSRR(db *sql.DB, rrChan chan rrDBData, wg *sync.WaitGroup) {
 	insertRR(db, rrChan, wg, tablesFields, namesStmts, nsRRF)
 }
 
-func insertIPRR(db *sql.DB, rrChan chan rrDBData, wg *sync.WaitGroup) {
+func insertIPRR(db *sql.DB, rrChan <-chan rrDBData, wg *sync.WaitGroup) {
 	tablesFields := map[string]string{
 		"name": "name",
 		"ip":   "address",
@@ -636,7 +666,7 @@ func insertIPRR(db *sql.DB, rrChan chan rrDBData, wg *sync.WaitGroup) {
 	insertRR(db, rrChan, wg, tablesFields, namesStmts, ipRRF)
 }
 
-func insertMXRR(db *sql.DB, rrChan chan rrDBData, wg *sync.WaitGroup) {
+func insertMXRR(db *sql.DB, rrChan <-chan rrDBData, wg *sync.WaitGroup) {
 	tablesFields := map[string]string{
 		"name": "name",
 	}
@@ -711,7 +741,7 @@ func nsRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
 	stmtMap.exec("parsed", ad.id)
 }
 
-func insertRR[rrType any](db *sql.DB, rrChan chan rrType, wg *sync.WaitGroup, tablesFields, namesStmts map[string]string, rrF func(tableMap TableMap, stmtMap StmtMap, rrD rrType)) {
+func insertRR[rrType any](db *sql.DB, rrChan <-chan rrType, wg *sync.WaitGroup, tablesFields, namesStmts map[string]string, rrF rrF[rrType]) {
 	tx := check1(db.Begin())
 
 	tableMap := getTableMap(tablesFields, tx)
@@ -747,7 +777,7 @@ func insertRR[rrType any](db *sql.DB, rrChan chan rrType, wg *sync.WaitGroup, ta
 	check(tx.Commit())
 }
 
-func getWalkableZones(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
+func getWalkableZones(db *sql.DB, zoneChan chan<- fieldData, wg *sync.WaitGroup) {
 	getDbFieldData(`
 		SELECT DISTINCT zone.name, zone.id
 		FROM name AS zone
@@ -759,7 +789,7 @@ func getWalkableZones(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
 	`, db, zoneChan, wg)
 }
 
-func getParentCheck(db *sql.DB, dataChan chan fieldData, wg *sync.WaitGroup) {
+func getParentCheck(db *sql.DB, dataChan chan<- fieldData, wg *sync.WaitGroup) {
 	getDbFieldData(`
 		SELECT name, id
 		FROM name
@@ -769,7 +799,7 @@ func getParentCheck(db *sql.DB, dataChan chan fieldData, wg *sync.WaitGroup) {
 	`, db, dataChan, wg)
 }
 
-func getRegUncheckedZones(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
+func getRegUncheckedZones(db *sql.DB, zoneChan chan<- fieldData, wg *sync.WaitGroup) {
 	getDbFieldData(`
 		SELECT name, id
 		FROM name
@@ -779,7 +809,7 @@ func getRegUncheckedZones(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGrou
 	`, db, zoneChan, wg)
 }
 
-func getValidUncheckedNames(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup) {
+func getValidUncheckedNames(db *sql.DB, zoneChan chan<- fieldData, wg *sync.WaitGroup) {
 	getDbFieldData(`
 		SELECT name, id
 		FROM name AS zone
@@ -787,7 +817,25 @@ func getValidUncheckedNames(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGr
 	`, db, zoneChan, wg)
 }
 
-func netZoneReader(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup, extraFilter string) {
+func getUnqueriedSPF(db *sql.DB, fdChan chan<- fieldData, wg *sync.WaitGroup) {
+	getDbFieldData(`
+		SELECT DISTINCT name.name, name.id
+		FROM name
+		INNER JOIN name_mx ON name_mx.name_id=name.id
+		WHERE name.txt_tried=FALSE
+	`, db, fdChan, wg)
+}
+
+func getUnqueriedSPFName(db *sql.DB, fdChan chan<- fieldData, wg *sync.WaitGroup) {
+	getDbFieldData(`
+		SELECT DISTINCT name.name, name.id
+		FROM name
+		INNER JOIN spf_name ON spf_name.name_id=name.id
+		WHERE spf_name.spfname=TRUE AND name.txt_tried=FALSE
+	`, db, fdChan, wg)
+}
+
+func netZoneReader(db *sql.DB, zoneChan chan<- fieldData, wg *sync.WaitGroup, extraFilter string) {
 	qs := fmt.Sprintf(`
 		SELECT zone.name, zone.id
 		FROM name AS zone
@@ -796,7 +844,7 @@ func netZoneReader(db *sql.DB, zoneChan chan fieldData, wg *sync.WaitGroup, extr
 	getDbFieldData(qs, db, zoneChan, wg)
 }
 
-func netResolvableReader(db *sql.DB, nsChan chan fieldData, wg *sync.WaitGroup) {
+func netResolvableReader(db *sql.DB, nsChan chan<- fieldData, wg *sync.WaitGroup) {
 	getDbFieldData(`
 		SELECT name.name, id
 		FROM name
@@ -804,7 +852,7 @@ func netResolvableReader(db *sql.DB, nsChan chan fieldData, wg *sync.WaitGroup) 
 	`, db, nsChan, wg)
 }
 
-func rdnsIPReader(db *sql.DB, ipChan chan fieldData, wg *sync.WaitGroup) {
+func rdnsIPReader(db *sql.DB, ipChan chan<- fieldData, wg *sync.WaitGroup) {
 	getDbFieldData(`
 		SELECT address, id
 		FROM ip
@@ -812,7 +860,7 @@ func rdnsIPReader(db *sql.DB, ipChan chan fieldData, wg *sync.WaitGroup) {
 	`, db, ipChan, wg)
 }
 
-func getDbFieldData(qs string, db *sql.DB, dataChan chan fieldData, wg *sync.WaitGroup) {
+func getDbFieldData(qs string, db *sql.DB, dataChan chan<- fieldData, wg *sync.WaitGroup) {
 	tx := check1(db.Begin())
 	rows := check1(tx.Query(qs))
 
@@ -829,7 +877,7 @@ func getDbFieldData(qs string, db *sql.DB, dataChan chan fieldData, wg *sync.Wai
 	close(dataChan)
 }
 
-func getZone2RR(filter string, db *sql.DB, dataChan chan rrDBData, wg *sync.WaitGroup) {
+func getZone2RR(filter string, db *sql.DB, dataChan chan<- rrDBData, wg *sync.WaitGroup) {
 	tx := check1(db.Begin())
 	rows := check1(tx.Query(fmt.Sprintf(`
 		SELECT
@@ -862,7 +910,7 @@ func getZone2RR(filter string, db *sql.DB, dataChan chan rrDBData, wg *sync.Wait
 	close(dataChan)
 }
 
-func getUnqueriedNsecRes(db *sql.DB, dataChan chan rrDBData, wg *sync.WaitGroup) {
+func getUnqueriedNsecRes(db *sql.DB, dataChan chan<- rrDBData, wg *sync.WaitGroup) {
 	tx := check1(db.Begin())
 	rows := check1(tx.Query(`
 		SELECT zone_walk_res.zone_id, zone_walk_res.id, rr_name.name, rr_name.id, rr_type.name, rr_type.id
@@ -886,19 +934,19 @@ func getUnqueriedNsecRes(db *sql.DB, dataChan chan rrDBData, wg *sync.WaitGroup)
 }
 
 func extractNSRR(db *sql.DB) {
-	readerWriter("extracting NS results from RR", db, func(db *sql.DB, rrChan chan rrDBData, wg *sync.WaitGroup) {
+	readerWriter("extracting NS results from RR", db, func(db *sql.DB, rrChan chan<- rrDBData, wg *sync.WaitGroup) {
 		getZone2RR("rr_type.name='NS'", db, rrChan, wg)
 	}, insertNSRR)
 }
 
 func extractIPRR(db *sql.DB) {
-	readerWriter("extracting IP results from RR", db, func(db *sql.DB, rrChan chan rrDBData, wg *sync.WaitGroup) {
+	readerWriter("extracting IP results from RR", db, func(db *sql.DB, rrChan chan<- rrDBData, wg *sync.WaitGroup) {
 		getZone2RR("(rr_type.name='A' OR rr_type.name='AAAA')", db, rrChan, wg)
 	}, insertIPRR)
 }
 
 func extractMXRR(db *sql.DB) {
-	readerWriter("extracting MX results from RR", db, func(db *sql.DB, rrChan chan rrDBData, wg *sync.WaitGroup) {
+	readerWriter("extracting MX results from RR", db, func(db *sql.DB, rrChan chan<- rrDBData, wg *sync.WaitGroup) {
 		getZone2RR("rr_type.name='MX'", db, rrChan, wg)
 	}, insertMXRR)
 }

@@ -16,7 +16,7 @@ type zoneData struct {
 	zone, filename string
 }
 
-func readZonefiles(zoneDataChan chan zoneData, rrDataChan chan rrData, wg *sync.WaitGroup) {
+func readZonefiles(zoneDataChan <-chan zoneData, rrDataChan chan<- rrData, wg *sync.WaitGroup) {
 	for zoneD := range zoneDataChan {
 		zoneName, filename := zoneD.zone, zoneD.filename
 		fp := check1(os.Open(filename))
@@ -31,22 +31,16 @@ func readZonefiles(zoneDataChan chan zoneData, rrDataChan chan rrData, wg *sync.
 			}
 
 			normalizeRR(rr)
-
 			rrValue := rr.String()
-
 			header := rr.Header()
 
-			// fmt.Printf("inserted %s\n", rrValue)
 			rrD := rrData{
-				zone:    zoneLower,
-				rrValue: rrValue,
-				rrType:  dns.TypeToString[header.Rrtype],
-				rrName:  header.Name,
-				msgtype: rrDataRegular,
-			}
-
-			if tldZone {
-				rrD.parentZone = true
+				zone:       zoneLower,
+				rrValue:    rrValue,
+				rrType:     dns.TypeToString[header.Rrtype],
+				rrName:     header.Name,
+				msgtype:    rrDataRegular,
+				parentZone: tldZone,
 			}
 
 			rrDataChan <- rrD
@@ -79,9 +73,8 @@ func parseZoneFiles(db *sql.DB) {
 	go insertRRWorker(db, rrDataChan, &wg)
 
 	wg.Add(len(matches))
-	numProcs := NUMPROCS
 
-	for i := 0; i < numProcs; i++ {
+	for i := 0; i < NUMPROCS; i++ {
 		go readZonefiles(zoneDataChan, rrDataChan, &wg)
 	}
 
