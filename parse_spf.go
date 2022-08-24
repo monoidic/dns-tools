@@ -63,7 +63,7 @@ const (
 var macroExpand = `(?:%{[slodiphv][0-9]*r?[-.+,/_=]*}|%[%_-])`
 
 // ( *alphanum ALPHA *alphanum ) / ( 1*alphanum "-" *( alphanum / "-" ) alphanum )
-var topLabel = `(?:[a-zA-Z0-9]*[a-zA-Z][a-zA-Z0-9]*|[a-zA-Z0-9]+-[a-zA-Z0-9-]*[a-zA-Z0-9])`
+var topLabel = `(?i:[a-z0-9]*[a-z][a-z0-9]*|[a-z0-9]+-[a-z0-9-]*[a-z0-9])`
 
 // ( "." toplabel [ "." ] ) / macro-expand
 var domainEnd = `(?:\.` + topLabel + `\.?|` + macroExpand + `)`
@@ -75,13 +75,13 @@ var ipv4Cidr = `(?:/(?:3[0-2]|[12]?[0-9]))`
 var ipv6Cidr = `(?:/(?:12[0-8]|(?:1[01]|[1-9])?[0-9]))`
 var dualCidr = `(?:(?P<v4cidr>` + ipv4Cidr + `)?(?:/(?P<v6cidr>` + ipv6Cidr + `))?)`
 
-var patternName = compileExactMatch(`[a-zA-Z][a-zA-Z0-9_.-]*`)
+var patternName = compileExactMatch(`(?i)[a-z][a-z0-9_.-]*`)
 var patternMacroString = compileExactMatch(macroString)
 var patternIPv4CIDR = compileExactMatch(ipv4Cidr)
 var patternIPv6CIDR = compileExactMatch(ipv6Cidr)
 var patternDualCidr = compileExactMatch(dualCidr)
 var patternRecord = compileExactMatch(`(?:v=spf1)(?P<terms>(?: +[^ ]+)+)? *`)
-var patternDirective = compileExactMatch(`(?P<qualifier>[+?~-]?)(?P<mechanism>i(?:nclude|p[46])|a(?:ll)?|exists|ptr|mx)(?P<remainder>.*)`)
+var patternDirective = compileExactMatch(`(?P<qualifier>[+?~-]?)(?P<mechanism>(?i)i(?:nclude|p[46])|a(?:ll)?|exists|ptr|mx)(?P<remainder>.*)`)
 var patternDomainSpec = compileExactMatch(`(?:` + macroString + domainEnd + `)`)
 
 var patternDualCidrMap = getPatternNameMap(patternDualCidr)
@@ -89,9 +89,10 @@ var patternRecordMap = getPatternNameMap(patternRecord)
 var patternDirectiveMap = getPatternNameMap(patternDirective)
 
 type spfData struct {
-	terms    []any
-	names    []string
-	spfNames []string
+	terms      []any
+	names      []string
+	spfNames   []string
+	anyUnknown bool
 }
 
 type spfDirective struct {
@@ -147,9 +148,12 @@ extractDataL:
 				name = termT.spec
 				isMacro = termT.isMacroName
 				isSPFName = termT.modType == spfModifierTypeRedirect
-			default:
+			case spfModifierTypeUnknown:
+				data.anyUnknown = true
 				continue extractDataL // don't try anything with unknown modifiers
 			}
+		default:
+			panic("unknown modifier")
 		}
 		if len(name) == 0 {
 			continue
@@ -204,7 +208,7 @@ func (spf *spfData) tryParseDirective(txt []byte) (parsed bool, err error) {
 	}
 
 	qualifier := directiveParts[patternDirectiveMap["qualifier"]]
-	mechanism := directiveParts[patternDirectiveMap["mechanism"]]
+	mechanism := bytes.ToLower(directiveParts[patternDirectiveMap["mechanism"]])
 	remainder := directiveParts[patternDirectiveMap["remainder"]]
 
 	if err = spf.parseDirective(qualifier, mechanism, remainder); err != nil {
@@ -324,7 +328,7 @@ func (spf *spfData) parseModifier(txt []byte) error {
 	key := modifierParts[0]
 	spec := modifierParts[1]
 
-	switch string(key) {
+	switch string(bytes.ToLower(key)) {
 	case "redirect":
 		modifier.modType = spfModifierTypeRedirect
 	case "exp":
@@ -338,7 +342,7 @@ func (spf *spfData) parseModifier(txt []byte) error {
 		if !patternDomainSpec.Match(spec) {
 			return Error{s: "invalid domain spec"}
 		}
-	default:
+	case spfModifierTypeUnknown:
 		if !patternName.Match(key) {
 			return Error{s: "invalid unknown-modifier name"}
 		}
@@ -346,6 +350,8 @@ func (spf *spfData) parseModifier(txt []byte) error {
 			return Error{s: "invalid macro string in unknown-modifier"}
 		}
 		modifier.key = string(key)
+	default:
+		panic("unknown modifier")
 	}
 	modifier.spec = dns.Fqdn(string(spec))
 	modifier.isMacroName = bytes.ContainsRune(spec, '%')
@@ -356,7 +362,7 @@ func (spf *spfData) parseModifier(txt []byte) error {
 func getPatternNameMap(pattern *regexp.Regexp) map[string]int {
 	names := pattern.SubexpNames()
 	ret := make(map[string]int, len(names)-1) // assumes all matches are named
-	for i, key := range pattern.SubexpNames() {
+	for i, key := range names {
 		if key == "" {
 			continue
 		}

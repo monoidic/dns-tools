@@ -2,7 +2,6 @@ package main
 
 import (
 	"database/sql"
-	"fmt"
 	"math/rand"
 	"strings"
 	"sync"
@@ -57,7 +56,7 @@ func checkBlacklisted(mname, rname string) bool {
 	return false
 }
 
-func getNsecState(nsec3param string, nsecSigs []dns.NSEC, nsec3Sigs []*dns.NSEC3) (string, string) {
+func getNsecState(nsec3param string, nsecSigs []dns.NSEC, nsec3Sigs []dns.NSEC3) (string, string) {
 	var nsecT uint
 	var nsecS string
 
@@ -82,7 +81,7 @@ func getNsecState(nsec3param string, nsecSigs []dns.NSEC, nsec3Sigs []*dns.NSEC3
 		nsecType := "plain_nsec"
 		for _, rr := range nsecSigs {
 			decoded := []byte(rr.NextDomain)
-			doDDD(decoded)
+			decoded = doDDD(decoded)
 			switch decoded[0] {
 			case '\x00', '!':
 				nsecType = "secure_nsec"
@@ -120,8 +119,7 @@ func getNsecState(nsec3param string, nsecSigs []dns.NSEC, nsec3Sigs []*dns.NSEC3
 			suffix = append(suffix, strings.Join(builder, "|"))
 		}
 
-		nsecSArr = append(nsecSArr, strings.Join(prefix, ","))
-		nsecSArr = append(nsecSArr, suffix...)
+		nsecSArr = append(append(nsecSArr, strings.Join(prefix, ",")), suffix...)
 
 		nsecS = strings.Join(nsecSArr, "&")
 
@@ -142,7 +140,7 @@ func checkNsecWorker(inChan <-chan fieldData, outChan chan<- fdResults, wg *sync
 		}},
 	}
 	msgSetSize(&msg)
-	msg.Extra[0].(*dns.OPT).SetDo()
+	setOpt(&msg).SetDo()
 
 	resolverWorker(inChan, outChan, msg, checkNsecQuery, wg, once)
 }
@@ -160,16 +158,10 @@ func checkNsecQuery(connCache connCache, msg dns.Msg, fd fieldData) fdResults {
 		if err == nil {
 			break
 		}
-		// fmt.Printf("checkNsecQuery err 1: nameserver %s, name %s, err no. %d: %v\n", nameserver, fd.name, i, err)
 	}
 
 	if !(err == nil && res.Rcode == dns.RcodeSuccess) {
 		return fdResults{fieldData: fd} // empty
-		//rcode := 69
-		//if res != nil {
-		//	rcode = res.Rcode
-		//}
-		//fmt.Printf("continue 1: zone=%s err=%s rcode=%d\n", fd.name, err, rcode)
 	}
 
 nsec3paramLoop:
@@ -182,14 +174,14 @@ nsec3paramLoop:
 	}
 
 	var nsecSigs []dns.NSEC
-	var nsec3Sigs []*dns.NSEC3
+	var nsec3Sigs []dns.NSEC3
 
 	for _, rr := range res.Ns { // authority section
 		switch rrT := rr.(type) {
 		case *dns.NSEC:
 			nsecSigs = append(nsecSigs, *rrT)
 		case *dns.NSEC3:
-			nsec3Sigs = append(nsec3Sigs, rrT)
+			nsec3Sigs = append(nsec3Sigs, *rrT)
 		}
 	}
 
@@ -285,10 +277,5 @@ func checkNsecInsert(tableMap TableMap, stmtMap StmtMap, fd fdResults) {
 }
 
 func checkNsec(db *sql.DB) {
-	fmt.Println("checking NSEC security levels")
-
-	zoneChan := make(chan fieldData, BUFLEN)
-	var wg sync.WaitGroup
-	go netZoneReader(db, zoneChan, &wg, "AND zone.nsec_mapped=FALSE")
-	checkNsecMaster(db, zoneChan, &wg)
+	readerWriter("checking NSEC security levels", db, netZoneReaderGen("AND zone.nsec_mapped=FALSE"), checkNsecMaster)
 }

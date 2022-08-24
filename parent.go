@@ -53,10 +53,10 @@ func parentCheck(db *sql.DB, inChan <-chan fieldData, wg *sync.WaitGroup) {
 		"set_zone":    "UPDATE name SET is_zone=TRUE WHERE id=?",
 		"set_unreg":   "UPDATE name SET reg_checked=TRUE, registered=FALSE WHERE id=?",
 		"mapped":      "UPDATE name SET parent_mapped=TRUE WHERE id=?",
-		"name_parent": "INSERT OR IGNORE INTO name_parent (child_id, parent_id) VALUES (?, ?)",
+		"name_parent": "UPDATE name SET parent_id=? WHERE id=?",
 	}
 
-	cpChan := make(chan childParent, BUFLEN)
+	cpChan := make(chan childParent, MIDBUFLEN)
 	go addChildParent(inChan, cpChan)
 
 	netWriterTable(db, cpChan, wg, tablesFields, namesStmts, parentCheckWorker, parentCheckWriter)
@@ -89,7 +89,7 @@ func parentCheckWriter(tableMap TableMap, stmtMap StmtMap, res childParent) {
 		}
 
 		stmtMap.exec("set_zone", parentID)
-		stmtMap.exec("name_parent", res.child.id, parentID)
+		stmtMap.exec("name_parent", parentID, res.child.id)
 
 	}
 

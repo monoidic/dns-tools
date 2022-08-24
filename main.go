@@ -16,8 +16,8 @@ import (
 
 const (
 	RETRIES   = 5
-	TIMEOUT   = 5 * time.Second
 	BUFLEN    = 10_000
+	MIDBUFLEN = 100
 	CHUNKSIZE = 100_000
 )
 
@@ -43,11 +43,6 @@ func check1[T any](arg1 T, err error) T {
 	return arg1
 }
 
-func check2[T1, T2 any](arg1 T1, arg2 T2, err error) (T1, T2) {
-	check(err)
-	return arg1, arg2
-}
-
 type flagData struct {
 	doAction    bool
 	description string
@@ -57,10 +52,12 @@ type flagData struct {
 var flags = map[string]*flagData{
 	"parse_lists":       {description: "parse domain lists under lists/", function: parseDomainLists},
 	"parse":             {description: "parse zone files under zones/", function: parseZoneFiles},
-	"in_addr":           {description: "enumerate in-addr.arpa nameservers", function: getInAddrArpa},
+	"arpa_v4":           {description: "enumerate in-addr.arpa nameservers", function: recurseArpaV4},
+	"arpa_v6":           {description: "enumerate ip6.arpa nameservers", function: recurseArpaV6},
 	"rr_ns":             {description: "extract zone-ns relations from parsed RRs", function: extractNSRR},
 	"rr_ip":             {description: "extract name-ip relations from parsed RRs", function: extractIPRR},
 	"rr_mx":             {description: "extract name-mx relations from parsed RRs", function: extractMXRR},
+	"rr_ptr":            {description: "extract ptr-name relations from parsed RRs", function: extractPTRRR},
 	"net_ns":            {description: "fetch zone-ns relations from the internet", function: netNS},
 	"net_mx":            {description: "map MX records from the internet", function: resolveMX},
 	"net_ip":            {description: "fetch name-IP relations from the internet", function: netIP},
@@ -82,15 +79,15 @@ var flags = map[string]*flagData{
 var (
 	flagOrder = []string{
 		"parse", "parse_lists",
-		"in_addr",
-		"rr_ns", "rr_mx", "rr_ip",
+		"arpa_v4", "arpa_v6",
+		"rr_ns", "rr_mx", "rr_ip", "rr_ptr",
 		"net_ns", "net_mx", "net_ip",
 		"rdns", "check_up",
 		"nsec_map", "zone_walk", "zone_walk_results",
 		"axfr", "psl", "validate", "parent_map", "parent_ns",
 		"unregistered", "spf", "spf_links",
 	}
-	publicDnsFlags = []string{"in_addr", "net_ip", "net_mx", "net_ns", "nsec_map", "rdns", "spf", "spf_links", "unregistered", "zone_walk", "zone_walk_results"}
+	publicDnsFlags = []string{"arpa_v4", "arpa_v6", "net_ip", "net_mx", "net_ns", "nsec_map", "rdns", "spf", "spf_links", "unregistered", "zone_walk", "zone_walk_results"}
 	directConns    = []string{"axfr", "check_up", "parent_ns"}
 )
 
@@ -100,8 +97,8 @@ func main() {
 	}
 
 	var allowDirectConns bool
-
 	var dbName string
+
 	flag.StringVar(&dbName, "db", "test.sqlite3", "path to sqlite3 database file")
 	flag.StringVar(&networksFile, "net_file", "", "path to TSV file with country codes and subnets to scan")
 	flag.StringVar(&netCC, "cc", "", "country code to filter for from net_file in in_addr")
@@ -109,6 +106,7 @@ func main() {
 	flag.BoolVar(&v6, "v6", false, "allow implicit v6 connections (e.g AXFR)")
 	flag.BoolVar(&allowDirectConns, "direct_conns", false, "allow direct connections to servers besides the configured nameservers")
 	flag.BoolVar(&tldZone, "tld_zone", false, "treat parsed zone files as up-to-date zone file from TLD")
+
 	flag.Parse()
 	args = flag.Args()
 

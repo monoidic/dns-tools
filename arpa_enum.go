@@ -1,115 +1,73 @@
 package main
 
 import (
-	"bufio"
 	"database/sql"
 	"fmt"
 	"math/rand"
-	"net"
-	"os"
+	"net/netip"
+	"regexp"
 	"strings"
 	"sync"
 
 	"github.com/monoidic/dns"
-	"github.com/yl2chen/cidranger"
 )
 
-type rangerEntry struct {
-	subnet net.IPNet
-	match  bool
+type arpaResults struct {
+	rootID  int64
+	results []arpaResult
+}
+type arpaResult struct {
+	nxdomain bool
+	name     string
+	NSes     []dns.NS
 }
 
-func (entry rangerEntry) Network() net.IPNet {
-	return entry.subnet
-}
+var ptrV6Pattern = regexp.MustCompile("....")
 
-// 2^24 + 2^16 + 2^8 addresses
-// 239 * (2^16) + 239 * 2^8 + 239 addresses
-func generateInAddr(zoneChan chan<- string, wg *sync.WaitGroup) {
-	// for a := 0; a < 256; a++ {
-	for a := 1; a < 240; a++ {
-		addrA := fmt.Sprintf("%d.in-addr.arpa.", a)
-		wg.Add(1)
-		zoneChan <- addrA
-		for b := 0; b < 256; b++ {
-			addrB := fmt.Sprintf("%d.%s", b, addrA)
-			wg.Add(1)
-			zoneChan <- addrB
-			for c := 0; c < 256; c++ {
-				wg.Add(1)
-				zoneChan <- fmt.Sprintf("%d.%s", c, addrB)
-			}
+func arpaWriter(translator func(inChan <-chan fieldData, outChan chan<- arpaResults)) writerF[fieldData] {
+	return func(db *sql.DB, fdChan <-chan fieldData, wg *sync.WaitGroup) {
+		tablesFields := map[string]string{
+			"name":     "name",
+			"rr_type":  "name",
+			"rr_name":  "name",
+			"rr_value": "value",
 		}
+		namesStmts := map[string]string{
+			"delete_root": "DELETE FROM unwalked_root WHERE id=?",
+			"add_root":    "INSERT INTO unwalked_root (name, ent) VALUES (?, ?)",
+			"zone2rr":     "INSERT OR IGNORE INTO zone2rr (zone_id, rr_type_id, rr_name_id, rr_value_id) VALUES (?, ?, ?, ?)",
+		}
+
+		resChan := make(chan arpaResults, MIDBUFLEN)
+		go translator(fdChan, resChan)
+
+		netWriter(db, resChan, wg, tablesFields, namesStmts, arpaWorker, arpaWrite)
 	}
-
-	wg.Wait()
-	close(zoneChan)
 }
 
-func generateInAddrNets(zoneChan chan<- string, wg *sync.WaitGroup, netsFile, cc string) {
-	fd := check1(os.Open(netsFile))
-
-	scanner := bufio.NewScanner(fd)
-	ranger := cidranger.NewPCTrieRanger()
-
-	for scanner.Scan() {
-		text := scanner.Text()
-		if strings.Contains(text, ".") { // IPv4 only here
-			split := strings.SplitN(text, "\t", 2)
-			if len(split) != 2 {
-				panic(fmt.Sprintf("invalid line: %q", text))
-			}
-			_, subnet := check2(net.ParseCIDR(split[1]))
-			check(ranger.Insert(rangerEntry{subnet: *subnet, match: split[0] == cc}))
+func arpaV4Translate(inChan <-chan fieldData, outChan chan<- arpaResults) {
+	for fd := range inChan {
+		res := arpaResults{rootID: fd.id, results: make([]arpaResult, 256)}
+		for i := 0; i < 256; i++ {
+			res.results[i] = arpaResult{name: fmt.Sprintf("%d.%s", i, fd.name)}
 		}
+		outChan <- res
 	}
-
-	var ip net.IP = make([]byte, 4)
-	var length int
-	var containingNets []cidranger.RangerEntry
-
-	for a := 1; a < 240; a++ {
-		addrA := fmt.Sprintf("%d.in-addr.arpa.", a)
-		ip[0] = byte(a)
-
-		containingNets = check1(ranger.ContainingNetworks(ip))
-
-		if length = len(containingNets); length > 0 && containingNets[length-1].(rangerEntry).match {
-			wg.Add(1)
-			zoneChan <- addrA
-		}
-
-		for b := 0; b < 256; b++ {
-			addrB := fmt.Sprintf("%d.%s", b, addrA)
-			ip[1] = byte(b)
-			containingNets = check1(ranger.ContainingNetworks(ip))
-
-			if length = len(containingNets); length > 0 && containingNets[length-1].(rangerEntry).match {
-				wg.Add(1)
-				zoneChan <- addrB
-			}
-
-			for c := 0; c < 256; c++ {
-				ip[2] = byte(c)
-
-				containingNets = check1(ranger.ContainingNetworks(ip))
-
-				if length = len(containingNets); length > 0 && containingNets[length-1].(rangerEntry).match {
-					wg.Add(1)
-					zoneChan <- fmt.Sprintf("%d.%s", c, addrB)
-				}
-			}
-			ip[2] = 0
-		}
-		ip[1] = 0
-	}
-
-	wg.Wait()
-	close(zoneChan)
-	check(fd.Close())
+	close(outChan)
 }
 
-func inAddrWorker(zoneChan <-chan string, outChan chan<- inAddrData, wg *sync.WaitGroup, once *sync.Once) {
+func arpaV6Translate(inChan <-chan fieldData, outChan chan<- arpaResults) {
+	for fd := range inChan {
+		res := arpaResults{rootID: fd.id, results: make([]arpaResult, 16)}
+		for i, c := range "0123456789abcdef" {
+			res.results[i] = arpaResult{name: fmt.Sprintf("%c.%s", c, fd.name)}
+		}
+		outChan <- res
+	}
+	close(outChan)
+}
+
+func arpaWorker(inChan <-chan arpaResults, outChan chan<- arpaResults, wg *sync.WaitGroup, once *sync.Once) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -123,72 +81,99 @@ func inAddrWorker(zoneChan <-chan string, outChan chan<- inAddrData, wg *sync.Wa
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(zoneChan, outChan, msg, inAddrResolve, wg, once)
+	resolverWorker(inChan, outChan, msg, arpaResolve, wg, once)
 }
 
-func inAddrResolve(connCache connCache, msg dns.Msg, zone string) inAddrData {
-	msg.Question[0].Name = zone
-	var err error
-	var NSes []string
-	var response *dns.Msg
+func arpaResolve(connCache connCache, msg dns.Msg, results arpaResults) arpaResults {
+	for resI, result := range results.results {
+		msg.Question[0].Name = result.name
+		var err error
+		var response *dns.Msg
 
-	for i := 0; i < RETRIES; i++ {
-		nameserver := usedNs[rand.Intn(usedNsLen)]
-		response, err = plainResolve(msg, connCache, nameserver)
-		if err == nil {
-			break
+		for i := 0; i < RETRIES; i++ {
+			nameserver := usedNs[rand.Intn(usedNsLen)]
+			if response, err = plainResolve(msg, connCache, nameserver); err == nil {
+				break
+			}
 		}
-		// fmt.Printf("inAddrResolve: %s\n", err)
-	}
 
-	if response != nil {
-		for _, rr := range response.Answer {
-			switch rrT := rr.(type) {
-			case *dns.NS:
-				NSes = append(NSes, dns.Fqdn(strings.ToLower(rrT.Ns)))
+		if response != nil {
+			for _, rr := range response.Answer {
+				switch rrT := rr.(type) {
+				case *dns.NS:
+					normalizeRR(rrT)
+					result.NSes = append(result.NSes, *rrT)
+				}
+			}
+		}
+
+		result.nxdomain = response.Rcode != dns.RcodeSuccess
+		fmt.Printf("rcode for %s: %s\n", result.name, dns.RcodeToString[response.Rcode])
+		results.results[resI] = result
+	}
+	return results
+}
+
+func arpaWrite(tableMap TableMap, stmtMap StmtMap, datum arpaResults) {
+	stmtMap.exec("delete_root", datum.rootID)
+
+	for _, result := range datum.results {
+		if !result.nxdomain {
+			fmt.Printf("new root %s\n", result.name)
+			ent := len(result.NSes) == 0
+			stmtMap.exec("add_root", result.name, ent)
+
+			if !ent {
+				rrTypeID := tableMap.get("rr_type", "NS")
+				for _, ns := range result.NSes {
+					rrNameID := tableMap.get("rr_name", ns.Hdr.Name)
+					zoneID := tableMap.get("name", ns.Hdr.Name)
+					rrValueID := tableMap.get("rr_value", ns.String())
+
+					stmtMap.exec("zone2rr", zoneID, rrTypeID, rrNameID, rrValueID)
+				}
 			}
 		}
 	}
-
-	return inAddrData{zone: zone, NSes: NSes}
 }
 
-func inAddrWriter(db *sql.DB, zoneChan <-chan string, wg *sync.WaitGroup) {
-	tablesFields := map[string]string{
-		"name": "name",
-	}
-	namesStmts := map[string]string{
-		"insert":     "INSERT OR IGNORE INTO zone_ns (zone_id, ns_id) VALUES (?, ?)",
-		"nameToZone": "UPDATE name SET is_zone=TRUE, is_rdns=TRUE WHERE id=?",
-		"nameToNS":   "UPDATE name SET is_ns=TRUE WHERE id=?",
-	}
-
-	netWriter(db, zoneChan, wg, tablesFields, namesStmts, inAddrWorker, inAddrWrite)
-}
-
-func inAddrWrite(tableMap TableMap, stmtMap StmtMap, iad inAddrData) {
-	if len(iad.NSes) > 0 {
-		zoneID := tableMap.get("name", iad.zone)
-		stmtMap.exec("nameToZone", zoneID)
-
-		for _, ns := range iad.NSes {
-			nsID := tableMap.get("name", ns)
-			stmtMap.exec("nameToNS", nsID)
-			stmtMap.exec("insert", zoneID, nsID)
-		}
-	}
-}
-
-func getInAddrArpa(db *sql.DB) {
-	fmt.Println("Checking for in-addr.arpa zones")
-
-	var wg sync.WaitGroup
-	nsChan := make(chan string, BUFLEN)
-
-	if networksFile == "" || netCC == "" {
-		go generateInAddr(nsChan, &wg)
+func ptrToIP(s string) netip.Addr {
+	if strings.HasSuffix(s, ".ip6.arpa.") {
+		s = s[:len(s)-len(".ip6.arpa.")]
+		s = strings.ReplaceAll(s, ".", "")
+		s = reverseASCII(s)
+		s = strings.Join(ptrV6Pattern.FindAllString(s, -1), ":")
+	} else if strings.HasSuffix(s, ".in-addr.arpa.") {
+		s = s[:len(s)-len(".in-addr.arpa.")]
+		s = reverseASCII(s)
 	} else {
-		go generateInAddrNets(nsChan, &wg, networksFile, netCC)
+		panic(fmt.Sprintf("invalid addr: %q", s))
 	}
-	inAddrWriter(db, nsChan, &wg)
+	return netip.MustParseAddr(s)
+}
+
+func reverseASCII(s string) string {
+	b := []byte(s)
+	l := len(b)
+	for i := 0; i < l/2; i++ {
+		b[i], b[l-i-1] = b[l-i-1], b[i]
+	}
+	return string(b)
+}
+
+func setupArpa(db *sql.DB, root string) {
+	tx := check1(db.Begin())
+	check1(tx.Exec(`DELETE FROM unwalked_root`))
+	check1(tx.Exec(fmt.Sprintf(`INSERT INTO unwalked_root (name) VALUES ('%s')`, root)))
+	check(tx.Commit())
+}
+
+func recurseArpaV4(db *sql.DB) {
+	setupArpa(db, "in-addr.arpa.")
+	readerWriterRecurse("recursing through in-addr.arpa.", db, getUnqueriedArpaRoots, arpaWriter(arpaV4Translate))
+}
+
+func recurseArpaV6(db *sql.DB) {
+	setupArpa(db, "ip6.arpa.")
+	readerWriterRecurse("recursing through ip6.arpa.", db, getUnqueriedArpaRoots, arpaWriter(arpaV6Translate))
 }

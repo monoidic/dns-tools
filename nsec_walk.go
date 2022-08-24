@@ -36,8 +36,9 @@ func (wz *walkZone) contains(z string) bool {
 }
 
 func (wz *walkZone) addKnown(rr dns.NSEC) bool {
-	start := strings.ToLower(rr.Hdr.Name)
-	end := strings.ToLower(rr.NextDomain)
+	normalizeRR(&rr)
+	start := rr.Hdr.Name
+	end := rr.NextDomain
 
 	if !(start == wz.zone || strings.HasSuffix(start, "."+wz.zone)) { // subdomain check
 		return false
@@ -269,7 +270,8 @@ func nsecWalkQuery(connCache connCache, msg dns.Msg, zd fieldData) walkZone {
 			for _, rr := range res.Ns {
 				switch rrT := rr.(type) {
 				case *dns.SOA:
-					if soaZone := strings.ToLower(rrT.Hdr.Name); dns.Compare(zone, soaZone) != 0 && dns.IsSubDomain(zone, soaZone) {
+					normalizeRR(rrT)
+					if soaZone := rrT.Hdr.Name; dns.Compare(zone, soaZone) != 0 && dns.IsSubDomain(zone, soaZone) {
 						// fmt.Printf("found subdomain %s of domain %s\n", soaZone, zone)
 						wz.subdomains[soaZone] = true
 						foundSubdomains = true
@@ -317,10 +319,10 @@ func nsecWalkMaster(db *sql.DB, zoneChan <-chan fieldData, wg *sync.WaitGroup) {
 		"rr_name": "name",
 	}
 	namesStmts := map[string]string{
-		"walkRes":    "INSERT OR IGNORE INTO zone_walk_res (zone_id, rr_name_id, rr_type_id) VALUES (?, ?, ?)",
-		"subdomain":  "INSERT OR IGNORE INTO name_parent (child_id, parent_id) VALUES (?, ?)",
-		"setWalked":  "UPDATE name SET nsec_walked=TRUE WHERE id=?",
-		"nameToZone": "UPDATE name SET is_zone=TRUE WHERE id=?",
+		"walk_res":     "INSERT OR IGNORE INTO zone_walk_res (zone_id, rr_name_id, rr_type_id) VALUES (?, ?, ?)",
+		"subdomain":    "UPDATE name SET parent_id=? WHERE id=?",
+		"set_walked":   "UPDATE name SET nsec_walked=TRUE WHERE id=?",
+		"name_to_zone": "UPDATE name SET is_zone=TRUE WHERE id=?",
 	}
 
 	netWriter(db, zoneChan, wg, tablesFields, namesStmts, nsecWalkWorker, nsecWalkInsert)
@@ -385,26 +387,21 @@ func nsecWalkInsert(tableMap TableMap, stmtMap StmtMap, zw walkZone) {
 
 			rrTypeID := tableMap.get("rr_type", rrType)
 
-			stmtMap.exec("walkRes", zoneID, rrNameID, rrTypeID)
+			stmtMap.exec("walk_res", zoneID, rrNameID, rrTypeID)
 		}
 	}
 
 	for subdomain := range zw.subdomains {
 		childZoneID := tableMap.get("name", subdomain)
-		stmtMap.exec("nameToZone", childZoneID)
-		stmtMap.exec("subdomain", childZoneID, zoneID)
+		stmtMap.exec("name_to_zone", childZoneID)
+		stmtMap.exec("subdomain", zoneID, childZoneID)
 	}
 
-	stmtMap.exec("setWalked", zoneID)
+	stmtMap.exec("set_walked", zoneID)
 }
 
 func nsecWalk(db *sql.DB) {
-	fmt.Println("performing NSEC walks")
-
-	var wg sync.WaitGroup
-	zoneChan := make(chan fieldData, BUFLEN)
-	go getWalkableZones(db, zoneChan, &wg)
-	nsecWalkMaster(db, zoneChan, &wg)
+	readerWriter("performing NSEC walks", db, getWalkableZones, nsecWalkMaster)
 }
 
 func decrementLabel(data []string) []string {
@@ -465,7 +462,7 @@ func getMiddle(zone, start, end string) []string {
 			panic(fmt.Sprintf("start splits to nil: %s", start))
 		}
 
-		for _, f := range []middleFunc{nop, minusAppended, minusSubdomains, minusSubdomain, incrementLabel} {
+		for _, f := range []middleFunc{minusAppended, nop, minusSubdomains, minusSubdomain, incrementLabel} {
 			res := strings.Join(f(splitStart), ".") + "."
 			if dns.IsSubDomain(zone, res) && dns.Compare(start, res) <= 0 && (end == "" || dns.Compare(res, end) == -1) {
 				ret = append(ret, res)
@@ -478,7 +475,7 @@ func getMiddle(zone, start, end string) []string {
 
 // TODO get Compare into miekg/dns
 
-func doDDD(b []byte) {
+func doDDD(b []byte) []byte {
 	lb := len(b)
 	for i := 0; i < lb; i++ {
 		if i+3 < lb && b[i] == '\\' && isDigit(b[i+1]) && isDigit(b[i+2]) && isDigit(b[i+3]) {
@@ -489,6 +486,7 @@ func doDDD(b []byte) {
 			lb -= 3
 		}
 	}
+	return b[:lb]
 }
 
 func dddToByte(s []byte) byte {

@@ -1,3 +1,12 @@
+split everything into
+1) fetch to zone2rr
+2) parse from zone2rr
+
+collect CNAMEs in all net_* functions?
+
+populate maybe_zone (domain lists?)
+mark NXDOMAINs on ENTs (parent of valid name is NXDOMAIN; only check for parents on validated existing names and don't trust NXDOMAINs to recurse?)
+
 scan SPF records for unreg domains?
 + other stuff relying on DNS
 
@@ -8,8 +17,6 @@ figure out better method for checking for unregistered domains (fails due to NXD
 flag more stuff as registered/valid_tried based on e.g working queries
 
 avoid registration check for parent_name insertions (check from_parent in nsRRF)
-
-use UPSERT?
 
 mark registrations in net_ip (NS name)/net_mx/net_ns (zone name)
 

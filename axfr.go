@@ -82,8 +82,7 @@ func axfrWorker(zipChan <-chan zoneIP, rrDataChan chan<- rrData, readWg, wg *syn
 	axfrRetryLoop:
 		for i := 0; i < RETRIES; i++ {
 			now := time.Now()
-			err := performAxfr(msg, rrDataChan, ns)
-			if err == nil {
+			if err := performAxfr(msg, rrDataChan, ns); err == nil {
 				// timeScanned := now.UTC().Format("2006/01/02 15:04")
 				rrDataChan <- rrData{
 					zone:    zone,
@@ -92,13 +91,13 @@ func axfrWorker(zipChan <-chan zoneIP, rrDataChan chan<- rrData, readWg, wg *syn
 					scanned: now.Unix(),
 				}
 				break
-			}
-
-			switch errStr := err.Error(); errStr {
-			case "dns: bad xfr rcode: 1", "dns: bad xfr rcode: 3", "dns: bad xfr rcode: 4", "dns: bad xfr rcode: 5", "dns: no SOA":
-				break axfrRetryLoop
-			default:
-				// fmt.Printf("(ns=%s zone=%s) performAxfr: %T %s\n", ns, zone, err, errStr)
+			} else {
+				switch errStr := err.Error(); errStr {
+				case "dns: bad xfr rcode: 1", "dns: bad xfr rcode: 3", "dns: bad xfr rcode: 4", "dns: bad xfr rcode: 5", "dns: no SOA":
+					break axfrRetryLoop
+				default:
+					// fmt.Printf("(ns=%s zone=%s) performAxfr: %T %s\n", ns, zone, err, errStr)
+				}
 			}
 		}
 
@@ -170,14 +169,14 @@ func publicAxfr(db *sql.DB) {
 	var ipVersionChan chan zoneIP
 
 	if len(AxfrWhitelistedZoneSet)+len(AxfrWhitelistedIPSet) > 0 {
-		whitelistedChan = make(chan zoneIP, BUFLEN)
+		whitelistedChan = make(chan zoneIP, MIDBUFLEN)
 		go axfrWhitelist(zipChan, whitelistedChan, &wg)
 	} else {
 		whitelistedChan = zipChan
 	}
 
 	if !v6 {
-		ipVersionChan = make(chan zoneIP, BUFLEN)
+		ipVersionChan = make(chan zoneIP, MIDBUFLEN)
 		go axfrV4Only(whitelistedChan, ipVersionChan, &wg)
 	} else {
 		ipVersionChan = whitelistedChan
