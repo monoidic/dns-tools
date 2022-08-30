@@ -2,6 +2,8 @@ split everything into
 1) fetch to zone2rr
 2) parse from zone2rr
 
+more intelligent ARPA scans? (record scanned ranges/depths and NXDOMAINs somehow (store unwalked ranges?), use AXFR/NSEC walk if possible instead of brute forcing)
+
 collect CNAMEs in all net_* functions?
 
 populate maybe_zone (domain lists?)

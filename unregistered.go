@@ -77,30 +77,4 @@ func unregisteredWrite(_ TableMap, stmtMap StmtMap, reg regStatus) {
 
 func getUnregisteredDomains(db *sql.DB) {
 	readerWriter("finding unregistered domains", db, getRegUncheckedZones, detectUnregisteredDomains)
-	propagateUnreg(db)
-}
-
-func propagateUnreg(db *sql.DB) {
-	tx := check1(db.Begin())
-
-	var numChanges int64 = 1
-
-	for numChanges != 0 {
-		check1(tx.Exec(`
-			UPDATE name
-			SET registered=FALSE, reg_checked=TRUE
-			FROM name AS child
-			INNER JOIN name AS parent ON child.parent_id=parent.id
-			WHERE parent.registered=FALSE
-			AND child.registered=TRUE
-			AND name.id=child.id
-		`))
-
-		rows := check1(tx.Query("SELECT changes()"))
-		rows.Next()
-		check(rows.Scan(&numChanges))
-		check(rows.Close())
-	}
-
-	check(tx.Commit())
 }

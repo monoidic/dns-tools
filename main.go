@@ -25,11 +25,11 @@ var NUMPROCS = runtime.GOMAXPROCS(0)
 
 var (
 	args         []string
-	networksFile string
-	netCC        string
 	tcpOnly      bool
 	v6           bool
 	tldZone      bool
+	networksFile string
+	netCC        string
 )
 
 func check(err error) {
@@ -99,9 +99,9 @@ func main() {
 	var allowDirectConns bool
 	var dbName string
 
-	flag.StringVar(&dbName, "db", "test.sqlite3", "path to sqlite3 database file")
 	flag.StringVar(&networksFile, "net_file", "", "path to TSV file with country codes and subnets to scan")
 	flag.StringVar(&netCC, "cc", "", "country code to filter for from net_file in in_addr")
+	flag.StringVar(&dbName, "db", "test.sqlite3", "path to sqlite3 database file")
 	flag.BoolVar(&tcpOnly, "tcp", false, "only use TCP connections")
 	flag.BoolVar(&v6, "v6", false, "allow implicit v6 connections (e.g AXFR)")
 	flag.BoolVar(&allowDirectConns, "direct_conns", false, "allow direct connections to servers besides the configured nameservers")
@@ -137,8 +137,8 @@ func main() {
 		}
 	}
 
-	readConfig()
 	netCC = strings.ToUpper(netCC)
+	readConfig()
 
 	connstring := fmt.Sprintf("file:%s?_journal_mode=WAL&mode=rwc", dbName)
 	db := check1(sql.Open("sqlite3", connstring))
