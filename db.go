@@ -24,6 +24,7 @@ var initStmts = []string{
 		is_rdns       INTEGER NOT NULL DEFAULT FALSE,
 		cname_tgt_id  INTEGER REFERENCES name(id),
 		parent_id     INTEGER REFERENCES name(id),
+		etldp1_id     INTEGER REFERENCES name(id),
 		registered    INTEGER NOT NULL DEFAULT TRUE,
 		reg_checked   INTEGER NOT NULL DEFAULT FALSE,
 		nsec_mapped   INTEGER NOT NULL DEFAULT FALSE,
@@ -38,6 +39,7 @@ var initStmts = []string{
 		valid_tried   INTEGER NOT NULL DEFAULT FALSE, -- validation has been verified
 		parent_mapped INTEGER NOT NULL DEFAULT FALSE,
 		maybe_zone    INTEGER NOT NULL DEFAULT FALSE,
+		maybe_checked INTEGER NOT NULL DEFAULT FALSE,
 		inserted      INTEGER NOT NULL DEFAULT FALSE
 	)
 	`,
@@ -163,6 +165,7 @@ var initStmts = []string{
 		inserted    INTEGER NOT NULL DEFAULT FALSE,
 		from_parent INTEGER NOT NULL DEFAULT FALSE,
 		from_self   INTEGER NOT NULL DEFAULT FALSE,
+		poison      INTEGER NOT NULL DEFAULT FALSE,
 		UNIQUE(zone_id, rr_type_id, rr_name_id, rr_value_id)
 	)
 	`,
@@ -551,7 +554,7 @@ func insertRRWorker(db *sql.DB, rrDataChan <-chan rrData, wg *sync.WaitGroup) {
 		"ip":       "address",
 	}
 	namesStmts := map[string]string{
-		"insert":           "INSERT OR IGNORE INTO zone2rr (zone_id, rr_type_id, rr_name_id, rr_value_id) VALUES (?, ?, ?, ?)",
+		"insert":           "INSERT OR IGNORE INTO zone2rr (zone_id, rr_type_id, rr_name_id, rr_value_id, poison) VALUES (?, ?, ?, ?, ?)",
 		"update":           "UPDATE name SET inserted=TRUE, is_zone=TRUE WHERE id=?",
 		"vuln_ns":          "INSERT INTO axfrable_ns (ip_id, zone_id, scan_time) VALUES (?, ?, ?) ON CONFLICT DO UPDATE SET scan_time=excluded.scan_time",
 		"axfr_tried":       "UPDATE name SET axfr_tried=TRUE WHERE id=?",
@@ -590,7 +593,9 @@ func insertRRWorker(db *sql.DB, rrDataChan <-chan rrData, wg *sync.WaitGroup) {
 			rrNameID := tableMap.get("rr_name", rrD.rrName)
 			rrValueID := tableMap.get("rr_value", rrD.rrValue)
 
-			stmtMap.exec("insert", zoneID, rrTypeID, rrNameID, rrValueID)
+			poison := !dns.IsSubDomain(rrD.zone, rrD.rrName)
+
+			stmtMap.exec("insert", zoneID, rrTypeID, rrNameID, rrValueID, poison)
 
 			if rrD.selfZone || rrD.parentZone {
 				stmtMap.exec("self_parent_zone", rrD.selfZone, rrD.parentZone, zoneID, rrTypeID, rrNameID, rrValueID)
@@ -852,6 +857,14 @@ func getUnqueriedSPFName(db *sql.DB, fdChan chan<- fieldData, wg *sync.WaitGroup
 		FROM name
 		INNER JOIN spf_name ON spf_name.name_id=name.id
 		WHERE spf_name.spfname=TRUE AND name.txt_tried=FALSE
+	`, db, fdChan, wg)
+}
+
+func getMaybeZones(db *sql.DB, fdChan chan<- fieldData, wg *sync.WaitGroup) {
+	getDbFieldData(`
+		SELECT name.name, name.id
+		FROM name
+		WHERE name.maybe_zone=TRUE
 	`, db, fdChan, wg)
 }
 

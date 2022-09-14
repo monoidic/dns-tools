@@ -23,18 +23,27 @@ const (
 type zoneValid struct {
 	fieldData // child zone
 	status    tldStatus
+	eTLDplus1 string
+}
+
+type zoneMaybe struct {
+	fieldData
+	isZone   bool
+	servfail bool
+	nxdomain bool
 }
 
 func validMapper(zoneChan <-chan fieldData, outChan chan<- zoneValid, wg *sync.WaitGroup, once *sync.Once) {
 	for zd := range zoneChan {
 		if zd.name == "." {
-			outChan <- zoneValid{fieldData: zd, status: icannTLD}
+			outChan <- zoneValid{fieldData: zd, status: icannTLD, eTLDplus1: "."}
 			continue
 		}
 
 		dotless := zd.name[:len(zd.name)-1]
 		eTLD, icann := publicsuffix.PublicSuffix(dotless)
 		var status tldStatus
+		eTLDplus1 := "."
 		if icann {
 			status = icannTLD // ICANN TLD
 		} else if strings.IndexByte(eTLD, '.') >= 0 {
@@ -43,11 +52,16 @@ func validMapper(zoneChan <-chan fieldData, outChan chan<- zoneValid, wg *sync.W
 			status = invalidTLD // invalid
 		}
 
-		if status != invalidTLD && dotless == eTLD {
-			status = selfTLD
+		if status != invalidTLD {
+			if dotless == eTLD {
+				eTLDplus1 = eTLD
+				status = selfTLD
+			} else {
+				eTLDplus1 = check1(publicsuffix.EffectiveTLDPlusOne(dotless))
+			}
 		}
 
-		outChan <- zoneValid{fieldData: zd, status: status}
+		outChan <- zoneValid{fieldData: zd, status: status, eTLDplus1: dns.Fqdn(eTLDplus1)}
 	}
 
 	wg.Done()
@@ -61,12 +75,14 @@ func validWriter(db *sql.DB, zoneChan <-chan fieldData, wg *sync.WaitGroup) {
 	}
 	namesStmts := map[string]string{
 		"validation": "UPDATE name SET valid=?, valid_tried=TRUE WHERE id=?",
+		"etldp1":     "UPDATE name SET etldp1_id=? WHERE id=?",
+		"maybe_zone": "UPDATE name SET maybe_zone=TRUE WHERE id=? AND maybe_checked=FALSE AND is_zone=FALSE AND registered=TRUE AND valid=TRUE",
 	}
 
 	netWriter(db, zoneChan, wg, tablesFields, namesStmts, validMapper, validInsert)
 }
 
-func validInsert(_ TableMap, stmtMap StmtMap, zv zoneValid) {
+func validInsert(tableMap TableMap, stmtMap StmtMap, zv zoneValid) {
 	var valid bool
 	switch zv.status {
 	case invalidTLD:
@@ -76,10 +92,13 @@ func validInsert(_ TableMap, stmtMap StmtMap, zv zoneValid) {
 		valid = true
 	}
 	stmtMap.exec("validation", valid, zv.id)
+	etldp1ID := tableMap.get("name", zv.eTLDplus1)
+	stmtMap.exec("etldp1", etldp1ID, zv.id)
+	stmtMap.exec("maybe_zone", etldp1ID)
 }
 
 func getTLDs(_ *sql.DB, tldChan chan<- string, wg *sync.WaitGroup) {
-	fp := check1(os.Open("lists/tld.txt"))
+	fp := check1(os.Open("misc/tld.txt"))
 
 	scanner := bufio.NewScanner(fp)
 
@@ -107,7 +126,7 @@ func tldListWriter(db *sql.DB, tldChan <-chan string, wg *sync.WaitGroup) {
 		"name": "name",
 	}
 	namesStmts := map[string]string{
-		"to_zone": "UPDATE name SET is_zone=TRUE WHERE id=?",
+		"maybe_zone": "UPDATE name SET maybe_zone=TRUE WHERE id=? AND maybe_checked=FALSE AND is_zone=FALSE AND registered=TRUE AND valid=TRUE",
 	}
 
 	insertRR(db, tldChan, wg, tablesFields, namesStmts, tldListInsert)
@@ -115,7 +134,79 @@ func tldListWriter(db *sql.DB, tldChan <-chan string, wg *sync.WaitGroup) {
 
 func tldListInsert(tableMap TableMap, stmtMap StmtMap, tld string) {
 	tldID := tableMap.get("name", tld)
-	stmtMap.exec("to_zone", tldID)
+	stmtMap.exec("maybe_zone", tldID)
+}
+
+func maybeZoneWriter(db *sql.DB, fdChan <-chan fieldData, wg *sync.WaitGroup) {
+	tablesFields := map[string]string{
+		"name": "name",
+	}
+	namesStmts := map[string]string{
+		"zone_status": "UPDATE name SET maybe_zone=FALSE, reg_checked=TRUE, is_zone=?, registered=? WHERE id=?",
+		"servfail":    "UPDATE name SET maybe_zone=FALSE WHERE id=?",
+	}
+
+	netWriter(db, fdChan, wg, tablesFields, namesStmts, maybeMapper, maybeInsert)
+}
+
+func maybeMapper(fdChan <-chan fieldData, outChan chan<- zoneMaybe, wg *sync.WaitGroup, once *sync.Once) {
+	msg := dns.Msg{
+		MsgHdr: dns.MsgHdr{
+			Opcode:           dns.OpcodeQuery,
+			RecursionDesired: true,
+			Rcode:            dns.RcodeSuccess,
+		},
+		Question: []dns.Question{{
+			Qclass: dns.ClassINET,
+			Qtype:  dns.TypeSOA,
+		}},
+	}
+	msgSetSize(&msg)
+
+	resolverWorker(fdChan, outChan, msg, maybeZoneResolve, wg, once)
+}
+
+func maybeZoneResolve(connCache connCache, msg dns.Msg, fd fieldData) (zm zoneMaybe) {
+	zm.fieldData = fd
+	msg.Question[0].Name = dns.Fqdn(fd.name)
+	var response *dns.Msg
+	var err error
+
+	for i := 0; i < RETRIES; i++ {
+		nameserver := randomNS()
+		if response, err = plainResolve(msg, connCache, nameserver); err == nil {
+			break
+		}
+	}
+
+	if response == nil || response.MsgHdr.Rcode == dns.RcodeServerFailure {
+		zm.servfail = true
+		return zm
+	}
+
+	if response.MsgHdr.Rcode == dns.RcodeNameError { // nxdomain
+		zm.nxdomain = true
+		return zm
+	}
+
+maybeZoneResolveL:
+	for _, rr := range response.Answer {
+		switch rr.(type) {
+		case *dns.SOA:
+			zm.isZone = true
+			break maybeZoneResolveL
+		}
+	}
+
+	return zm
+}
+
+func maybeInsert(_ TableMap, stmtMap StmtMap, zm zoneMaybe) {
+	if zm.servfail {
+		stmtMap.exec("servfail", zm.id)
+	} else {
+		stmtMap.exec("zone_status", zm.isZone, !zm.nxdomain, zm.id)
+	}
 }
 
 func insertPSL(db *sql.DB) {
@@ -124,4 +215,8 @@ func insertPSL(db *sql.DB) {
 
 func validateZones(db *sql.DB) {
 	readerWriter("validating zones", db, getValidUncheckedNames, validWriter)
+}
+
+func maybeZone(db *sql.DB) {
+	readerWriter("resolving maybe-zones", db, getMaybeZones, maybeZoneWriter)
 }

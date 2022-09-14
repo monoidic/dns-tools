@@ -2,7 +2,6 @@ package main
 
 import (
 	"database/sql"
-	"math/rand"
 	"strings"
 	"sync"
 
@@ -153,7 +152,7 @@ func checkNsecQuery(connCache connCache, msg dns.Msg, fd fieldData) fdResults {
 	msg.Question[0].Name = fd.name
 
 	for i := 0; i < RETRIES; i++ {
-		nameserver := usedNs[rand.Intn(usedNsLen)]
+		nameserver := randomNS()
 		res, err = plainResolve(msg, connCache, nameserver)
 		if err == nil {
 			break
@@ -210,7 +209,7 @@ soaLoop:
 		msg.Extra = []dns.RR{}
 
 		for i := 0; i < RETRIES; i++ {
-			nameserver := usedNs[rand.Intn(usedNsLen)]
+			nameserver := randomNS()
 			res, err = plainResolve(msg, connCache, nameserver)
 			if err == nil {
 				break

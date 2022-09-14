@@ -256,7 +256,7 @@ func cookieFetcher(protoCache *ttlcache.Cache[string, *dns.Conn], client *dns.Cl
 			protoCache.Delete(host)
 		}
 
-		return nil
+		return c.Set(host, "", ttlcache.DefaultTTL)
 	}))
 }
 
@@ -541,7 +541,7 @@ func nsecWalkResultResolve(connCache connCache, msg dns.Msg, rrD rrDBData) (res 
 	var err error
 
 	for i := 0; i < RETRIES; i++ {
-		nameserver := usedNs[rand.Intn(usedNsLen)]
+		nameserver := randomNS()
 		if response, err = plainResolve(msg, connCache, nameserver); err == nil {
 			break
 		}
@@ -576,7 +576,7 @@ func nsResolve(connCache connCache, msg dns.Msg, fd fieldData) rrResults[dns.NS]
 	var err error
 
 	for i := 0; i < RETRIES; i++ {
-		nameserver := usedNs[rand.Intn(usedNsLen)]
+		nameserver := randomNS()
 		if response, err = plainResolve(msg, connCache, nameserver); err == nil {
 			break
 		}
@@ -602,7 +602,7 @@ func mxResolve(connCache connCache, msg dns.Msg, fd fieldData) mxData {
 	registered := true
 
 	for i := 0; i < RETRIES; i++ {
-		nameserver := usedNs[rand.Intn(usedNsLen)]
+		nameserver := randomNS()
 		if response, err = plainResolve(msg, connCache, nameserver); err == nil {
 			break
 		}
@@ -636,7 +636,7 @@ func addrResolve(connCache connCache, msg dns.Msg, fd fieldData) addrData {
 		var response *dns.Msg
 
 		for i := 0; i < RETRIES; i++ {
-			nameserver := usedNs[rand.Intn(usedNsLen)]
+			nameserver := randomNS()
 			if response, err = plainResolve(msg, connCache, nameserver); err == nil {
 				break
 			}
@@ -674,7 +674,7 @@ func parentCheckResolve(connCache connCache, msg dns.Msg, cp childParent) childP
 	var err error
 
 	for i := 0; i < RETRIES; i++ {
-		nameserver := usedNs[rand.Intn(usedNsLen)]
+		nameserver := randomNS()
 		res, err = plainResolve(msg, connCache, nameserver)
 		if err == nil {
 			break
@@ -731,7 +731,7 @@ func rdnsResolve(connCache connCache, msg dns.Msg, fd fieldData) rrResults[dns.P
 
 	for i := 0; i < RETRIES; i++ {
 		var err error
-		nameserver := usedNs[rand.Intn(usedNsLen)]
+		nameserver := randomNS()
 		res, err = plainResolve(msg, connCache, nameserver)
 		if err == nil {
 			break
@@ -758,7 +758,7 @@ func txtResolve(connCache connCache, msg dns.Msg, fd fieldData) fdResults {
 
 	for i := 0; i < RETRIES; i++ {
 		var err error
-		nameserver := usedNs[rand.Intn(usedNsLen)]
+		nameserver := randomNS()
 		res, err = plainResolve(msg, connCache, nameserver)
 		if err == nil {
 			break
@@ -922,7 +922,7 @@ func netIPWriter(db *sql.DB, nameChan <-chan fieldData, wg *sync.WaitGroup) {
 		// "zone2rr":          "INSERT OR IGNORE INTO zone2rr (zone_id, rr_type_id, rr_name_id, rr_value_id) VALUES (?, ?, ?, ?)",
 		// "zone2rr_inserted": "UPDATE zone2rr SET inserted=TRUE WHERE zone_id=? AND rr_type_id=? AND rr_name_id=? AND rr_value_id=?",
 		"insert":      "INSERT INTO name_ip (name_id, ip_id, in_self_zone) VALUES (?, ?, TRUE) ON CONFLICT DO UPDATE SET in_self_zone=TRUE",
-		"update":      "UPDATE name SET addr_resolved=TRUE, valid_tried=TRUE, reg_checked=TRUE, registered=? WHERE id=?",
+		"update":      "UPDATE name SET addr_resolved=TRUE, reg_checked=TRUE, registered=? WHERE id=?",
 		"cname_entry": "UPDATE name SET reg_checked=TRUE, registered=?, cname_tgt_id=? WHERE id=?",
 	}
 
@@ -1141,14 +1141,19 @@ func zoneIPReader(db *sql.DB, zipChan chan<- zoneIP, wg *sync.WaitGroup, extraFi
 func nsIPAdderWorker(db *sql.DB, zoneChan <-chan fieldData, withNSChan chan<- fdResults) {
 	tx := check1(db.Begin())
 
-	nsCache := getFDCache(`
+	var v4Filter string
+	if !v6 {
+		v4Filter = `AND ip.address LIKE '%.%'`
+	}
+
+	nsCache := getFDCache(fmt.Sprintf(`
 		SELECT DISTINCT ip.address || ':53', ip.id
 		FROM name AS child
 		INNER JOIN zone_ns ON zone_ns.zone_id = child.parent_id
 		INNER JOIN name_ip ON zone_ns.ns_id = name_ip.name_id
 		INNER JOIN ip ON name_ip.ip_id = ip.id
-		WHERE child.name=?
-	`, tx)
+		WHERE child.name=? %s
+	`, v4Filter), tx)
 
 	for zd := range zoneChan {
 		withNSChan <- fdResults{fieldData: zd, results: nsCache.getName(zd.name)}
@@ -1239,12 +1244,7 @@ func checkUp(db *sql.DB) {
 }
 
 func getParentNS(db *sql.DB) {
-	var v4Filter string
-	if !v6 {
-		v4Filter = `AND ip.address LIKE '%.%'`
-	}
-	filter := fmt.Sprintf("AND glue_ns=FALSE %s", v4Filter)
-	readerWriter("getting NS records from parent zone", db, netZoneReaderGen(filter), parentNSWriter)
+	readerWriter("getting NS records from parent zone", db, netZoneReaderGen("AND glue_ns=FALSE"), parentNSWriter)
 }
 
 func rdns(db *sql.DB) {

@@ -3,7 +3,6 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"math/rand"
 	"sort"
 	"strings"
 	"sync"
@@ -17,11 +16,12 @@ type walkZone struct {
 	zone            string
 	id              int64
 	unhandledRanges map[string]bool
-	knownRanges     [][2]string // sorted list of ranges; ends with (<last_record>, <first_record>)
+	knownRanges     [][2]string // sorted list of ranges; ends with (<last_record>, "")
 	subdomains      map[string]bool
 	rrTypes         map[string][]string
 }
 
+/*
 func (wz *walkZone) contains(z string) bool {
 	l := len(wz.knownRanges)
 
@@ -34,6 +34,7 @@ func (wz *walkZone) contains(z string) bool {
 	start, end := r[0], r[1]
 	return dns.Compare(start, z) <= 0 && (end == "" || dns.Compare(z, end) == -1)
 }
+*/
 
 func (wz *walkZone) addKnown(rr dns.NSEC) bool {
 	normalizeRR(&rr)
@@ -253,7 +254,7 @@ func nsecWalkQuery(connCache connCache, msg dns.Msg, zd fieldData) walkZone {
 			// fmt.Printf("trying middle %s between start=%s and end=%s\n", middle, start, end)
 			msg.Question[0].Name = middle
 			for i := 0; i < RETRIES; i++ {
-				nameserver := usedNs[rand.Intn(usedNsLen)]
+				nameserver := randomNS()
 				res, err = plainResolve(msg, connCache, nameserver)
 				if err == nil {
 					break

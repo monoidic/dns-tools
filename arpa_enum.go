@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"database/sql"
 	"fmt"
-	"math/rand"
 	"net/netip"
 	"os"
 	"regexp"
@@ -181,7 +180,7 @@ func arpaResolve(connCache connCache, msg dns.Msg, results arpaResults) arpaResu
 		var response *dns.Msg
 
 		for i := 0; i < RETRIES; i++ {
-			nameserver := usedNs[rand.Intn(usedNsLen)]
+			nameserver := randomNS()
 			if response, err = plainResolve(msg, connCache, nameserver); err == nil {
 				break
 			}

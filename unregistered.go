@@ -3,7 +3,6 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"math/rand"
 	"sync"
 
 	"github.com/monoidic/dns"
@@ -39,7 +38,7 @@ func regMap(connCache connCache, msg dns.Msg, zd fieldData) regStatus {
 
 loop:
 	for i := 0; i < RETRIES; i++ {
-		nameserver := usedNs[rand.Intn(usedNsLen)]
+		nameserver := randomNS()
 		res, err := plainResolve(msg, connCache, nameserver)
 		if err != nil {
 			// fmt.Printf("regMapper: %s\n", err)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"math/rand"
 	"os"
 )
 
@@ -34,4 +35,8 @@ func readConfig() {
 	for _, ip := range globalConf.AxfrWhitelistedIPs {
 		AxfrWhitelistedIPSet[ip] = true
 	}
+}
+
+func randomNS() string {
+	return usedNs[rand.Intn(usedNsLen)]
 }

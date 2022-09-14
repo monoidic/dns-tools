@@ -59,8 +59,9 @@ var flags = map[string]*flagData{
 	"rr_mx":             {description: "extract name-mx relations from parsed RRs", function: extractMXRR},
 	"rr_ptr":            {description: "extract ptr-name relations from parsed RRs", function: extractPTRRR},
 	"net_ns":            {description: "fetch zone-ns relations from the internet", function: netNS},
-	"net_mx":            {description: "map MX records from the internet", function: resolveMX},
 	"net_ip":            {description: "fetch name-IP relations from the internet", function: netIP},
+	"net_mx":            {description: "map MX records from the internet", function: resolveMX},
+	"net_ptr":           {description: "perform rDNS queries on all saved IP addresses", function: rdns},
 	"check_up":          {description: "perform test queries on NSes to mark responsivity of IPs", function: checkUp},
 	"nsec_map":          {description: "map nsec statuses of DNS zones on the internet", function: checkNsec},
 	"zone_walk":         {description: "perform zone walk on vulnerable zones", function: nsecWalk},
@@ -70,10 +71,10 @@ var flags = map[string]*flagData{
 	"parent_ns":         {description: "fetch nameservers and glue A/AAAA records directly from a zone's parent zone", function: getParentNS},
 	"unregistered":      {description: "check if domain appears in DNS", function: getUnregisteredDomains},
 	"psl":               {description: "insert TLDs from PSL", function: insertPSL},
-	"rdns":              {description: "perform rDNS queries on all saved IP addresses", function: rdns},
 	"validate":          {description: "check if zones are valid", function: validateZones},
 	"spf":               {description: "attempt to fetch SPF records", function: spf},
 	"spf_links":         {description: "attempt to fetch linked SPF records", function: spfLinks},
+	"maybe_zone":        {description: "check whether \"maybe-zone\" names are zones", function: maybeZone},
 }
 
 var (
@@ -81,13 +82,14 @@ var (
 		"parse", "parse_lists",
 		"arpa_v4", "arpa_v6",
 		"rr_ns", "rr_mx", "rr_ip", "rr_ptr",
-		"net_ns", "net_mx", "net_ip",
-		"rdns", "check_up",
+		"net_ns", "net_mx", "net_ip", "net_ptr",
+		"check_up",
 		"nsec_map", "zone_walk", "zone_walk_results",
 		"axfr", "psl", "validate", "parent_map", "parent_ns",
 		"unregistered", "spf", "spf_links",
+		"maybe_zone",
 	}
-	publicDnsFlags = []string{"arpa_v4", "arpa_v6", "net_ip", "net_mx", "net_ns", "nsec_map", "rdns", "spf", "spf_links", "unregistered", "zone_walk", "zone_walk_results"}
+	publicDnsFlags = []string{"arpa_v4", "arpa_v6", "net_ip", "net_mx", "net_ns", "nsec_map", "net_ptr", "spf", "spf_links", "unregistered", "zone_walk", "zone_walk_results"}
 	directConns    = []string{"axfr", "check_up", "parent_ns"}
 )
 

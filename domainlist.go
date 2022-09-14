@@ -33,7 +33,7 @@ func insertDomainWorker(db *sql.DB, domainChan <-chan string, wg *sync.WaitGroup
 		"name": "name",
 	}
 	namesStmts := map[string]string{
-		"domain": "UPDATE name SET is_zone=TRUE WHERE id=?",
+		"maybe_zone": "UPDATE name SET maybe_zone=TRUE WHERE id=? AND maybe_checked=FALSE AND is_zone=FALSE AND registered=TRUE AND valid=TRUE",
 	}
 
 	tx := check1(db.Begin())
@@ -56,8 +56,8 @@ func insertDomainWorker(db *sql.DB, domainChan <-chan string, wg *sync.WaitGroup
 			tableMap.update(tx)
 			stmtMap.update(tx)
 
-			tableMap.mx.Unlock()
 			stmtMap.mx.Unlock()
+			tableMap.mx.Unlock()
 		}
 		i--
 
@@ -73,7 +73,7 @@ func insertDomainWorker(db *sql.DB, domainChan <-chan string, wg *sync.WaitGroup
 func domainInsert(tableMap TableMap, stmtMap StmtMap, domain string) {
 	nameID := tableMap.get("name", domain)
 
-	stmtMap.exec("domain", nameID)
+	stmtMap.exec("maybe_zone", nameID)
 }
 
 func parseDomainLists(db *sql.DB) {
