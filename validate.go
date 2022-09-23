@@ -57,7 +57,12 @@ func validMapper(zoneChan <-chan fieldData, outChan chan<- zoneValid, wg *sync.W
 				eTLDplus1 = eTLD
 				status = selfTLD
 			} else {
-				eTLDplus1 = check1(publicsuffix.EffectiveTLDPlusOne(dotless))
+				var err error
+				eTLDplus1, err = publicsuffix.EffectiveTLDPlusOne(dotless)
+				if err != nil {
+					status = invalidTLD
+					eTLDplus1 = "."
+				}
 			}
 		}
 
