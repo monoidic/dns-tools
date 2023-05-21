@@ -33,7 +33,8 @@ var initStmts = []string{
 		ns_resolved   INTEGER NOT NULL DEFAULT FALSE,
 		glue_ns       INTEGER NOT NULL DEFAULT FALSE, -- for zones; glue NS has been fetched from parent zone
 		addr_resolved INTEGER NOT NULL DEFAULT FALSE,
-		txt_tried     INTEGER NOT NULL DEFAULT FALSE, -- currently for SPF
+		spf_tried     INTEGER NOT NULL DEFAULT FALSE,
+		dmarc_tried   INTEGER NOT NULL DEFAULT FALSE, -- so that '_dmarc.${name}' does not need to be stored
 		axfr_tried    INTEGER NOT NULL DEFAULT FALSE,
 		valid         INTEGER NOT NULL DEFAULT TRUE,  -- has valid parent zone chain/TLD
 		valid_tried   INTEGER NOT NULL DEFAULT FALSE, -- validation has been verified
@@ -50,6 +51,7 @@ var initStmts = []string{
 		address      TEXT UNIQUE NOT NULL,
 		rdns_mapped  INTEGER NOT NULL DEFAULT FALSE,
 		responsive   INTEGER NOT NULL DEFAULT TRUE,
+		ch_resolved  INTEGER NOT NULL DEFAULT FALSE, -- Chaosnet class records, e.g version.bind
 		resp_checked INTEGER NOT NULL DEFAULT FALSE
 	)
 	`,
@@ -107,29 +109,50 @@ var initStmts = []string{
 	`
 	CREATE TABLE IF NOT EXISTS spf
 	(
-		id             INTEGER PRIMARY KEY,
-		name_id        INTEGER NOT NULL REFERENCES name(id),
-		spf_record_id  TEXT NOT NULL REFERENCES spf_record(id),
+		id            INTEGER PRIMARY KEY,
+		name_id       INTEGER NOT NULL REFERENCES name(id),
+		spf_record_id INTEGER NOT NULL REFERENCES spf_record(id),
+		duplicate     INTEGER NOT NULL DEFAULT FALSE,
 		UNIQUE(name_id, spf_record_id)
 	)
 	`,
 	`
 	CREATE TABLE IF NOT EXISTS spf_record
 	(
-		id             INTEGER PRIMARY KEY,
-		value          TEXT UNIQUE NOT NULL,
-		valid          INTEGER NOT NULL DEFAULT TRUE,
-		any_unknown    INTEGER NOT NULL DEFAULT FALSE -- any unknown modifiers
+		id          INTEGER PRIMARY KEY,
+		value       TEXT UNIQUE NOT NULL,
+		valid       INTEGER NOT NULL DEFAULT TRUE,
+		error       TEXT, -- if valid == false, explain why
+		any_unknown INTEGER NOT NULL DEFAULT FALSE -- any unknown modifiers
 	)
 	`,
 	`
 	CREATE TABLE IF NOT EXISTS spf_name -- for DNS names scraped from the SPF record
 	(
-		id          INTEGER PRIMARY KEY,
-		spf_id      INTEGER NOT NULL REFERENCES spf(id),
-		name_id     INTEGER NOT NULL REFERENCES name(id),
-		spfname     INTEGER NOT NULL, -- bool, indicates names with additional spf records to fetch
+		id      INTEGER PRIMARY KEY,
+		spf_id  INTEGER NOT NULL REFERENCES spf(id),
+		name_id INTEGER NOT NULL REFERENCES name(id),
+		spfname INTEGER NOT NULL, -- bool, indicates names with additional spf records to fetch
 		UNIQUE(spf_id, name_id)
+	)
+	`,
+	`
+	CREATE TABLE IF NOT EXISTS dmarc_record
+	(
+		id    INTEGER PRIMARY KEY,
+		value TEXT UNIQUE NOT NULL,
+		valid INTEGER NOT NULL DEFAULT TRUE,
+		error TEXT -- if valid == false, explain why
+	)
+	`,
+	`
+	CREATE TABLE IF NOT EXISTS dmarc
+	(
+		id              INTEGER PRIMARY KEY,
+		name_id         INTEGER NOT NULL REFERENCES name(id),
+		dmarc_record_id INTEGER NOT NULL REFERENCES dmarc_record(id),
+		duplicate       INTEGER NOT NULL DEFAULT FALSE,
+		UNIQUE(name_id, dmarc_record_id)
 	)
 	`,
 	`
@@ -223,9 +246,35 @@ var initStmts = []string{
 	`
 	CREATE TABLE IF NOT EXISTS unwalked_root
 	(
-		id INTEGER PRIMARY KEY,
+		id   INTEGER PRIMARY KEY,
 		name TEXT UNIQUE NOT NULL,
-		ent INTEGER NOT NULL DEFAULT FALSE
+		ent  INTEGER NOT NULL DEFAULT FALSE
+	)
+	`,
+	`
+	CREATE TABLE IF NOT EXISTS chaos_query
+	(
+		id      INTEGER PRIMARY KEY,
+		name_id INTEGER NOT NULL REFERENCES name(id), -- e.g version.bind.
+		ip_id   INTEGER NOT NULL REFERENCES ip(id),
+		UNIQUE(name_id, ip_id)
+	)
+	`,
+	`
+	CREATE TABLE IF NOT EXISTS chaos_response_value
+	(
+		id    INTEGER PRIMARY KEY,
+		value TEXT UNIQUE NOT NULL
+	)
+	`,
+	`
+	CREATE TABLE IF NOT EXISTS chaos_response
+	(
+		id                      INTEGER PRIMARY KEY,
+		chaos_query_id          INTEGER NOT NULL REFERENCES chaos_query(id),
+		name_id                 INTEGER NOT NULL REFERENCES name(id), -- name in response may not match name in query
+		chaos_response_value_id INTEGER NOT NULL REFERENCES chaos_response_value(id),
+		UNIQUE(chaos_query_id, chaos_response_value_id)
 	)
 	`,
 }
@@ -268,14 +317,12 @@ type rrData struct {
 type StmtMap struct {
 	data map[string]*stmtData
 	mx   *sync.RWMutex
-	once *sync.Once
 	wg   *sync.WaitGroup
 }
 
 type TableMap struct {
 	data map[string]*tableData
 	mx   *sync.RWMutex
-	once *sync.Once
 	wg   *sync.WaitGroup
 }
 
@@ -391,7 +438,6 @@ func getTableMap(m map[string]string, tx *sql.Tx) TableMap {
 	return TableMap{
 		data: tableMap,
 		mx:   new(sync.RWMutex),
-		once: new(sync.Once),
 		wg:   new(sync.WaitGroup),
 	}
 }
@@ -440,13 +486,11 @@ func (tableMap TableMap) roGet(table, key string) int64 {
 func (tableMap TableMap) clear() {
 	tableMap.wg.Wait()
 	tableMap.mx.Lock()
-	tableMap.once.Do(func() {
-		for _, td := range tableMap.data {
-			td.cleanup()
-			td.cache.Stop()
-			td.cache.DeleteAll()
-		}
-	})
+	for _, td := range tableMap.data {
+		td.cleanup()
+		td.cache.Stop()
+		td.cache.DeleteAll()
+	}
 	// tableMap.mx.Unlock()
 }
 
@@ -461,7 +505,6 @@ func getStmtMap(m map[string]string, tx *sql.Tx) StmtMap {
 	return StmtMap{
 		data: stmtMap,
 		mx:   new(sync.RWMutex),
-		once: new(sync.Once),
 		wg:   new(sync.WaitGroup),
 	}
 }
@@ -474,10 +517,10 @@ func (stmtMap StmtMap) update(tx *sql.Tx) {
 	}
 }
 
-func (stmtMap StmtMap) exec(table string, args ...any) {
+func (stmtMap StmtMap) exec(ident string, args ...any) {
 	stmtMap.mx.RLock()
 
-	check1(stmtMap.data[table].stmt.Exec(args...))
+	check1(stmtMap.data[ident].stmt.Exec(args...))
 
 	stmtMap.mx.RUnlock()
 }
@@ -485,11 +528,9 @@ func (stmtMap StmtMap) exec(table string, args ...any) {
 func (stmtMap StmtMap) clear() {
 	stmtMap.wg.Wait()
 	stmtMap.mx.Lock()
-	stmtMap.once.Do(func() {
-		for _, std := range stmtMap.data {
-			check(std.stmt.Close())
-		}
-	})
+	for _, std := range stmtMap.data {
+		check(std.stmt.Close())
+	}
 	// stmtMap.mx.Unlock()
 }
 
@@ -627,7 +668,7 @@ func insertRRWorker(db *sql.DB, rrDataChan <-chan rrData, wg *sync.WaitGroup) {
 	wg.Done()
 }
 
-func insertNSRR(db *sql.DB, rrChan <-chan rrDBData, wg *sync.WaitGroup) {
+func insertNSRR(db *sql.DB, rrChan <-chan rrDBData) {
 	tablesFields := map[string]string{
 		"name": "name",
 	}
@@ -641,7 +682,7 @@ func insertNSRR(db *sql.DB, rrChan <-chan rrDBData, wg *sync.WaitGroup) {
 		"parsed":          "UPDATE zone2rr SET parsed=TRUE WHERE id=?",
 	}
 
-	insertRR(db, rrChan, wg, tablesFields, namesStmts, nsRRF)
+	insertRR(db, rrChan, tablesFields, namesStmts, nsRRF)
 }
 
 func nsRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
@@ -668,7 +709,7 @@ func nsRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
 	stmtMap.exec("parsed", ad.id)
 }
 
-func insertIPRR(db *sql.DB, rrChan <-chan rrDBData, wg *sync.WaitGroup) {
+func insertIPRR(db *sql.DB, rrChan <-chan rrDBData) {
 	tablesFields := map[string]string{
 		"name": "name",
 		"ip":   "address",
@@ -679,7 +720,7 @@ func insertIPRR(db *sql.DB, rrChan <-chan rrDBData, wg *sync.WaitGroup) {
 		"parsed":           "UPDATE zone2rr SET parsed=TRUE WHERE id=?",
 	}
 
-	insertRR(db, rrChan, wg, tablesFields, namesStmts, ipRRF)
+	insertRR(db, rrChan, tablesFields, namesStmts, ipRRF)
 }
 
 func ipRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
@@ -707,7 +748,7 @@ func ipRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
 	stmtMap.exec("parsed", ad.id)
 }
 
-func insertMXRR(db *sql.DB, rrChan <-chan rrDBData, wg *sync.WaitGroup) {
+func insertMXRR(db *sql.DB, rrChan <-chan rrDBData) {
 	tablesFields := map[string]string{
 		"name": "name",
 	}
@@ -717,7 +758,7 @@ func insertMXRR(db *sql.DB, rrChan <-chan rrDBData, wg *sync.WaitGroup) {
 		"parsed":  "UPDATE zone2rr SET parsed=TRUE WHERE id=?",
 	}
 
-	insertRR(db, rrChan, wg, tablesFields, namesStmts, mxRRF)
+	insertRR(db, rrChan, tablesFields, namesStmts, mxRRF)
 }
 
 func mxRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
@@ -734,7 +775,7 @@ func mxRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
 	stmtMap.exec("parsed", ad.id)
 }
 
-func insertPTRRR(db *sql.DB, rrChan <-chan rrDBData, wg *sync.WaitGroup) {
+func insertPTRRR(db *sql.DB, rrChan <-chan rrDBData) {
 	tablesFields := map[string]string{
 		"ip":   "address",
 		"name": "name",
@@ -746,27 +787,28 @@ func insertPTRRR(db *sql.DB, rrChan <-chan rrDBData, wg *sync.WaitGroup) {
 		"parsed":       "UPDATE zone2rr SET parsed=TRUE WHERE id=?",
 	}
 
-	insertRR(db, rrChan, wg, tablesFields, namesStmts, ptrRRF)
+	insertRR(db, rrChan, tablesFields, namesStmts, ptrRRF)
 }
 
 func ptrRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
-	rr := check1(dns.NewRR(ad.rrValue.name))
+	if ip, err := ptrToIP(ad.rrName.name); err != nil {
+		rr := check1(dns.NewRR(ad.rrValue.name))
+		ptrRR := rr.(*dns.PTR)
+		normalizeRR(ptrRR)
 
-	ptrRR := rr.(*dns.PTR)
-	normalizeRR(ptrRR)
+		ipString := ip.String()
+		ipID := tableMap.get("ip", ipString)
+		ptrID := tableMap.get("name", ptrRR.Ptr)
 
-	ipString := ptrToIP(ad.rrName.name).String()
-	ipID := tableMap.get("ip", ipString)
-	ptrID := tableMap.get("name", ptrRR.Ptr)
+		stmtMap.exec("rdns", ipID, ptrID)
+		stmtMap.exec("name_to_rdns", ptrID)
+		stmtMap.exec("mapped", ipID)
+	}
 
-	stmtMap.exec("rdns", ipID, ptrID)
-
-	stmtMap.exec("name_to_rdns", ptrID)
-	stmtMap.exec("mapped", ipID)
 	stmtMap.exec("parsed", ad.id)
 }
 
-func insertRR[rrType any](db *sql.DB, rrChan <-chan rrType, wg *sync.WaitGroup, tablesFields, namesStmts map[string]string, rrF rrF[rrType]) {
+func insertRR[rrType any](db *sql.DB, rrChan <-chan rrType, tablesFields, namesStmts map[string]string, rrF rrF[rrType]) {
 	tx := check1(db.Begin())
 
 	tableMap := getTableMap(tablesFields, tx)
@@ -793,8 +835,6 @@ func insertRR[rrType any](db *sql.DB, rrChan <-chan rrType, wg *sync.WaitGroup, 
 		i--
 
 		rrF(tableMap, stmtMap, rrD)
-
-		wg.Done()
 	}
 
 	tableMap.clear()
@@ -802,7 +842,7 @@ func insertRR[rrType any](db *sql.DB, rrChan <-chan rrType, wg *sync.WaitGroup, 
 	check(tx.Commit())
 }
 
-func getWalkableZones(db *sql.DB, zoneChan chan<- fieldData, wg *sync.WaitGroup) {
+func getWalkableZones(db *sql.DB, zoneChan chan<- fieldData) {
 	getDbFieldData(`
 		SELECT DISTINCT zone.name, zone.id
 		FROM name AS zone
@@ -811,106 +851,137 @@ func getWalkableZones(db *sql.DB, zoneChan chan<- fieldData, wg *sync.WaitGroup)
 		WHERE nsec_state.name='plain_nsec'
 		AND zone.nsec_walked=FALSE
 		AND zone.inserted=FALSE
-	`, db, zoneChan, wg)
+	`, db, zoneChan)
 }
 
-func getParentCheck(db *sql.DB, dataChan chan<- fieldData, wg *sync.WaitGroup) {
+func getParentCheck(db *sql.DB, dataChan chan<- fieldData) {
 	getDbFieldData(`
 		SELECT name, id
 		FROM name
 		WHERE
 		parent_mapped=FALSE
 		AND valid=TRUE
-	`, db, dataChan, wg)
+	`, db, dataChan)
 }
 
-func getRegUncheckedZones(db *sql.DB, zoneChan chan<- fieldData, wg *sync.WaitGroup) {
+func getRegUncheckedZones(db *sql.DB, zoneChan chan<- fieldData) {
 	getDbFieldData(`
 		SELECT name, id
 		FROM name
 		WHERE reg_checked=FALSE
 		AND is_zone=TRUE
 		AND valid=TRUE
-	`, db, zoneChan, wg)
+	`, db, zoneChan)
 }
 
-func getValidUncheckedNames(db *sql.DB, zoneChan chan<- fieldData, wg *sync.WaitGroup) {
+func getValidUncheckedNames(db *sql.DB, zoneChan chan<- fieldData) {
 	getDbFieldData(`
 		SELECT name, id
 		FROM name AS zone
 		WHERE valid_tried=FALSE
-	`, db, zoneChan, wg)
+	`, db, zoneChan)
 }
 
-func getUnqueriedSPF(db *sql.DB, fdChan chan<- fieldData, wg *sync.WaitGroup) {
+func getUnqueriedSPF(db *sql.DB, fdChan chan<- fieldData) {
 	getDbFieldData(`
 		SELECT DISTINCT name.name, name.id
 		FROM name
 		INNER JOIN name_mx ON name_mx.name_id=name.id
-		WHERE name.txt_tried=FALSE
-	`, db, fdChan, wg)
+		WHERE name.spf_tried=FALSE
+	`, db, fdChan)
 }
 
-func getUnqueriedSPFName(db *sql.DB, fdChan chan<- fieldData, wg *sync.WaitGroup) {
+func getUnqueriedDMARC(db *sql.DB, fdChan chan<- fieldData) {
+	getDbFieldData(`
+		SELECT DISTINCT name.name, name.id
+		FROM name
+		INNER JOIN name_mx ON name_mx.name_id=name.id
+		WHERE name.dmarc_tried=FALSE
+	`, db, fdChan)
+}
+
+// wrapper that prepends `_dmarc.` to the name while keeping the id the same
+func getUnqueriedDMARCWrap(db *sql.DB, fdChan chan<- fieldData) {
+	midChan := make(chan fieldData, BUFLEN)
+	go getUnqueriedDMARC(db, midChan)
+	for fd := range midChan {
+		fd.name = "_dmarc." + fd.name
+		fdChan <- fd
+	}
+	close(fdChan)
+}
+
+func getUnqueriedChaosTXT(db *sql.DB, ipChan chan<- fieldData) {
+	var v4Filter string
+	if !v6 {
+		v4Filter = `AND ip.address LIKE '%.%'`
+	}
+	filter := fmt.Sprintf(`
+		SELECT address, id
+		FROM ip
+		WHERE ch_resolved=FALSE %s
+	`, v4Filter)
+	getDbFieldData(filter, db, ipChan)
+}
+
+func getUnqueriedSPFName(db *sql.DB, fdChan chan<- fieldData) {
 	getDbFieldData(`
 		SELECT DISTINCT name.name, name.id
 		FROM name
 		INNER JOIN spf_name ON spf_name.name_id=name.id
-		WHERE spf_name.spfname=TRUE AND name.txt_tried=FALSE
-	`, db, fdChan, wg)
+		WHERE spf_name.spfname=TRUE AND name.spf_tried=FALSE
+	`, db, fdChan)
 }
 
-func getMaybeZones(db *sql.DB, fdChan chan<- fieldData, wg *sync.WaitGroup) {
+func getMaybeZones(db *sql.DB, fdChan chan<- fieldData) {
 	getDbFieldData(`
 		SELECT name.name, name.id
 		FROM name
 		WHERE name.maybe_zone=TRUE
-	`, db, fdChan, wg)
+	`, db, fdChan)
 }
 
-func netZoneReader(db *sql.DB, zoneChan chan<- fieldData, wg *sync.WaitGroup, extraFilter string) {
+func netZoneReader(db *sql.DB, zoneChan chan<- fieldData, extraFilter string) {
 	qs := fmt.Sprintf(`
 		SELECT zone.name, zone.id
 		FROM name AS zone
 		WHERE zone.is_zone=TRUE %s
 	`, extraFilter)
-	getDbFieldData(qs, db, zoneChan, wg)
+	getDbFieldData(qs, db, zoneChan)
 }
 
-func netResolvableReader(db *sql.DB, nsChan chan<- fieldData, wg *sync.WaitGroup) {
+func netResolvableReader(db *sql.DB, nsChan chan<- fieldData) {
 	getDbFieldData(`
 		SELECT name.name, id
 		FROM name
 		WHERE (is_ns=TRUE OR is_mx=TRUE) AND addr_resolved=FALSE
-	`, db, nsChan, wg)
+	`, db, nsChan)
 }
 
-func rdnsIPReader(db *sql.DB, ipChan chan<- fieldData, wg *sync.WaitGroup) {
+func rdnsIPReader(db *sql.DB, ipChan chan<- fieldData) {
 	getDbFieldData(`
 		SELECT address, id
 		FROM ip
 		WHERE rdns_mapped=FALSE
-	`, db, ipChan, wg)
+	`, db, ipChan)
 }
 
-func getDbFieldData(qs string, db *sql.DB, dataChan chan<- fieldData, wg *sync.WaitGroup) {
+func getDbFieldData(qs string, db *sql.DB, dataChan chan<- fieldData) {
 	tx := check1(db.Begin())
 	rows := check1(tx.Query(qs))
 
 	for rows.Next() {
 		var fd fieldData
 		check(rows.Scan(&fd.name, &fd.id))
-		wg.Add(1)
 		dataChan <- fd
 	}
 
 	check(rows.Close())
 	check(tx.Commit())
-	wg.Wait()
 	close(dataChan)
 }
 
-func getZone2RR(filter string, db *sql.DB, dataChan chan<- rrDBData, wg *sync.WaitGroup) {
+func getZone2RR(filter string, db *sql.DB, dataChan chan<- rrDBData) {
 	tx := check1(db.Begin())
 	rows := check1(tx.Query(fmt.Sprintf(`
 		SELECT
@@ -933,17 +1004,15 @@ func getZone2RR(filter string, db *sql.DB, dataChan chan<- rrDBData, wg *sync.Wa
 			&ad.rrName.name, &ad.rrName.id,
 			&ad.rrValue.name, &ad.rrValue.id,
 		))
-		wg.Add(1)
 		dataChan <- ad
 	}
 
 	check(rows.Close())
 	check(tx.Commit())
-	wg.Wait()
 	close(dataChan)
 }
 
-func getUnqueriedNsecRes(db *sql.DB, dataChan chan<- rrDBData, wg *sync.WaitGroup) {
+func getUnqueriedNsecRes(db *sql.DB, dataChan chan<- rrDBData) {
 	tx := check1(db.Begin())
 	rows := check1(tx.Query(`
 		SELECT
@@ -963,17 +1032,15 @@ func getUnqueriedNsecRes(db *sql.DB, dataChan chan<- rrDBData, wg *sync.WaitGrou
 			&rrD.rrName.name, &rrD.rrName.id,
 			&rrD.rrType.name, &rrD.rrType.id,
 		))
-		wg.Add(1)
 		dataChan <- rrD
 	}
 
 	check(rows.Close())
 	check(tx.Commit())
-	wg.Wait()
 	close(dataChan)
 }
 
-func getUnqueriedArpaRoots(db *sql.DB, dataChan chan<- fieldData, anyResponsesChan chan<- bool, wg *sync.WaitGroup) {
+func getUnqueriedArpaRoots(db *sql.DB, dataChan chan<- fieldData, anyResponsesChan chan<- bool) {
 	tx := check1(db.Begin())
 	rows := check1(tx.Query(`
 		SELECT id, name
@@ -986,59 +1053,55 @@ func getUnqueriedArpaRoots(db *sql.DB, dataChan chan<- fieldData, anyResponsesCh
 	if anyResponses {
 		var fd fieldData
 		check(rows.Scan(&fd.id, &fd.name))
-		wg.Add(1)
 		dataChan <- fd
 		for rows.Next() {
 			var fd fieldData
 			check(rows.Scan(&fd.id, &fd.name))
-			wg.Add(1)
 			dataChan <- fd
 		}
 	}
 
 	check(rows.Close())
 	check(tx.Commit())
-	wg.Wait()
 	close(dataChan)
 }
 
 func readerWriterRecurse[inType any](msg string, db *sql.DB, readerF readerRecurseF[inType], writerF writerF[inType]) {
 	fmt.Println(msg)
 
-	var wg sync.WaitGroup
 	anyResponsesChan := make(chan bool)
 	anyResponses := true
 
 	for anyResponses {
 		inChan := make(chan inType, BUFLEN)
 
-		go readerF(db, inChan, anyResponsesChan, &wg)
+		go readerF(db, inChan, anyResponsesChan)
 		anyResponses = <-anyResponsesChan
-		writerF(db, inChan, &wg)
+		writerF(db, inChan)
 	}
 	close(anyResponsesChan)
 }
 
 func extractNSRR(db *sql.DB) {
-	readerWriter("extracting NS results from RR", db, func(db *sql.DB, rrChan chan<- rrDBData, wg *sync.WaitGroup) {
-		getZone2RR("rr_type.name='NS'", db, rrChan, wg)
+	readerWriter("extracting NS results from RR", db, func(db *sql.DB, rrChan chan<- rrDBData) {
+		getZone2RR("rr_type.name='NS'", db, rrChan)
 	}, insertNSRR)
 }
 
 func extractIPRR(db *sql.DB) {
-	readerWriter("extracting IP results from RR", db, func(db *sql.DB, rrChan chan<- rrDBData, wg *sync.WaitGroup) {
-		getZone2RR("(rr_type.name='A' OR rr_type.name='AAAA')", db, rrChan, wg)
+	readerWriter("extracting IP results from RR", db, func(db *sql.DB, rrChan chan<- rrDBData) {
+		getZone2RR("(rr_type.name='A' OR rr_type.name='AAAA')", db, rrChan)
 	}, insertIPRR)
 }
 
 func extractMXRR(db *sql.DB) {
-	readerWriter("extracting MX results from RR", db, func(db *sql.DB, rrChan chan<- rrDBData, wg *sync.WaitGroup) {
-		getZone2RR("rr_type.name='MX'", db, rrChan, wg)
+	readerWriter("extracting MX results from RR", db, func(db *sql.DB, rrChan chan<- rrDBData) {
+		getZone2RR("rr_type.name='MX'", db, rrChan)
 	}, insertMXRR)
 }
 
 func extractPTRRR(db *sql.DB) {
-	readerWriter("extracting PTR results from RR", db, func(db *sql.DB, rrChan chan<- rrDBData, wg *sync.WaitGroup) {
-		getZone2RR("rr_type.name='PTR'", db, rrChan, wg)
+	readerWriter("extracting PTR results from RR", db, func(db *sql.DB, rrChan chan<- rrDBData) {
+		getZone2RR("rr_type.name='PTR'", db, rrChan)
 	}, insertPTRRR)
 }

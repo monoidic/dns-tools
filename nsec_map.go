@@ -14,7 +14,7 @@ const (
 	hasNsec3
 )
 
-var rnameBlacklist map[string]bool = makeSet([]string{
+var rnameBlacklist Set[string] = makeSet([]string{
 	// dns.cloudflare.com.",
 	// "awsdns-hostmaster.amazon.com.",
 	// "hostmaster.nsone.net.",
@@ -32,17 +32,17 @@ var mnameBlacklistSuffixes []string = []string{
 	// "ultradns.com.",
 }
 
-func makeSet[valueType comparable](l []valueType) map[valueType]bool {
-	ret := make(map[valueType]bool)
+func makeSet[valueType comparable](l []valueType) Set[valueType] {
+	ret := make(Set[valueType])
 	for _, k := range l {
-		ret[k] = true
+		ret.Set(k)
 	}
 	return ret
 }
 
 // TODO try to check nsecS itself and/or improve blacklist
 func checkBlacklisted(mname, rname string) bool {
-	if rnameBlacklist[rname] {
+	if rnameBlacklist.Contains(rname) {
 		return true
 	}
 
@@ -126,7 +126,7 @@ func getNsecState(nsec3param string, nsecSigs []dns.NSEC, nsec3Sigs []dns.NSEC3)
 	}
 }
 
-func checkNsecWorker(inChan <-chan fieldData, outChan chan<- fdResults, wg *sync.WaitGroup, once *sync.Once) {
+func checkNsecWorker(inChan <-chan fieldData, outChan chan<- fdResults, wg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -141,7 +141,7 @@ func checkNsecWorker(inChan <-chan fieldData, outChan chan<- fdResults, wg *sync
 	msgSetSize(&msg)
 	setOpt(&msg).SetDo()
 
-	resolverWorker(inChan, outChan, msg, checkNsecQuery, wg, once)
+	resolverWorker(inChan, outChan, msg, checkNsecQuery, wg)
 }
 
 func checkNsecQuery(connCache connCache, msg dns.Msg, fd fieldData) fdResults {
@@ -246,7 +246,7 @@ soaLoop:
 	return fdResults{fieldData: fd, results: []string{nsecState, rname, mname, nsecS}}
 }
 
-func checkNsecMaster(db *sql.DB, zoneChan <-chan fieldData, wg *sync.WaitGroup) {
+func checkNsecMaster(db *sql.DB, zoneChan <-chan fieldData) {
 	tablesFields := map[string]string{
 		"nsec_state": "name",
 		"rname":      "name",
@@ -257,7 +257,7 @@ func checkNsecMaster(db *sql.DB, zoneChan <-chan fieldData, wg *sync.WaitGroup) 
 		"update": "UPDATE name SET nsec_mapped=TRUE WHERE id=?",
 	}
 
-	netWriter(db, zoneChan, wg, tablesFields, namesStmts, checkNsecWorker, checkNsecInsert)
+	netWriter(db, zoneChan, tablesFields, namesStmts, checkNsecWorker, checkNsecInsert)
 }
 
 func checkNsecInsert(tableMap TableMap, stmtMap StmtMap, fd fdResults) {

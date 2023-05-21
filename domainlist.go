@@ -11,6 +11,7 @@ import (
 	"github.com/monoidic/dns"
 )
 
+// parse domain list files
 func readDomainLists(fileChan <-chan string, domainChan chan<- string, wg *sync.WaitGroup) {
 	for filename := range fileChan {
 		fp := check1(os.Open(filename))

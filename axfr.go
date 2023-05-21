@@ -17,6 +17,8 @@ import (
 // during big transfers???
 
 // check error? (don't retry with rcode Refused/FormatError/NotAuthoritative etc)
+
+// attempt AXFR query for a zone with a nameserver
 func performAxfr(msg dns.Msg, rrDataChan chan<- rrData, ns string) error {
 	t := new(dns.Transfer)
 	msg.Id = dns.Id()
@@ -62,7 +64,8 @@ func performAxfr(msg dns.Msg, rrDataChan chan<- rrData, ns string) error {
 	return nil
 }
 
-func axfrWorker(zipChan <-chan zoneIP, rrDataChan chan<- rrData, readWg, wg *sync.WaitGroup, once *sync.Once) {
+// worker that
+func axfrWorker(zipChan <-chan zoneIP, rrDataChan chan<- rrData, wg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode: dns.OpcodeQuery,
@@ -83,10 +86,17 @@ func axfrWorker(zipChan <-chan zoneIP, rrDataChan chan<- rrData, readWg, wg *syn
 		for i := 0; i < RETRIES; i++ {
 			now := time.Now()
 			if err := performAxfr(msg, rrDataChan, ns); err == nil {
+				start := 0
+				end := len(ns) - 3 // drop :53
+				if ns[0] == '[' {  // drop []
+					start++
+					end--
+				}
+				ip := ns[start:end]
 				// timeScanned := now.UTC().Format("2006/01/02 15:04")
 				rrDataChan <- rrData{
 					zone:    zone,
-					ip:      ns[:len(ns)-3], // drop ":53" suffix
+					ip:      ip,
 					msgtype: rrDataZoneAxfrEnd,
 					scanned: now.Unix(),
 				}
@@ -105,40 +115,35 @@ func axfrWorker(zipChan <-chan zoneIP, rrDataChan chan<- rrData, readWg, wg *syn
 			zone:    zone,
 			msgtype: rrDataZoneAxfrTry,
 		}
-
-		readWg.Done()
 	}
 
 	wg.Done()
-	wg.Wait()
-
-	once.Do(func() { close(rrDataChan) })
 }
 
-func publicAxfrMaster(db *sql.DB, zipChan <-chan zoneIP, readWg *sync.WaitGroup) {
+func publicAxfrMaster(db *sql.DB, zipChan <-chan zoneIP) {
 	numProcs := 64
 
 	rrDataChan := make(chan rrData, BUFLEN)
 
 	var wg sync.WaitGroup
-	var once sync.Once
 
 	wg.Add(numProcs)
 
 	for i := 0; i < numProcs; i++ {
-		go axfrWorker(zipChan, rrDataChan, readWg, &wg, &once)
+		go axfrWorker(zipChan, rrDataChan, &wg)
 	}
+
+	go closeChanWait(&wg, rrDataChan)
 
 	var dummyWg sync.WaitGroup
 	dummyWg.Add(1)
 	insertRRWorker(db, rrDataChan, &dummyWg)
 }
 
-func axfrWhitelist(inChan <-chan zoneIP, outChan chan<- zoneIP, wg *sync.WaitGroup) {
+// filter out whitelisted zones or nameserver IPs
+func axfrWhitelist(inChan <-chan zoneIP, outChan chan<- zoneIP) {
 	for zip := range inChan {
-		if AxfrWhitelistedZoneSet[zip.zone.name] || AxfrWhitelistedIPSet[zip.ip.name] {
-			wg.Done()
-		} else {
+		if !(AxfrWhitelistedZoneSet.Contains(zip.zone.name) || AxfrWhitelistedIPSet.Contains(zip.ip.name)) {
 			outChan <- zip
 		}
 	}
@@ -146,11 +151,10 @@ func axfrWhitelist(inChan <-chan zoneIP, outChan chan<- zoneIP, wg *sync.WaitGro
 	close(outChan)
 }
 
-func axfrV4Only(inChan <-chan zoneIP, outChan chan<- zoneIP, wg *sync.WaitGroup) {
+// filter out IPv6 addresses
+func axfrV4Only(inChan <-chan zoneIP, outChan chan<- zoneIP) {
 	for zip := range inChan {
-		if !strings.Contains(zip.ip.name, ".") { // ipv6
-			wg.Done()
-		} else {
+		if strings.Contains(zip.ip.name, ".") { // ipv4
 			outChan <- zip
 		}
 	}
@@ -161,28 +165,27 @@ func axfrV4Only(inChan <-chan zoneIP, outChan chan<- zoneIP, wg *sync.WaitGroup)
 func publicAxfr(db *sql.DB) {
 	fmt.Println("checking public AXFR")
 
-	var wg sync.WaitGroup
 	zipChan := make(chan zoneIP, BUFLEN)
-	go zoneIPReader(db, zipChan, &wg, "AND zone.axfr_tried=FALSE")
+	go zoneIPReader(db, zipChan, "AND zone.axfr_tried=FALSE")
 
 	var whitelistedChan chan zoneIP
 	var ipVersionChan chan zoneIP
 
 	if len(AxfrWhitelistedZoneSet)+len(AxfrWhitelistedIPSet) > 0 {
 		whitelistedChan = make(chan zoneIP, MIDBUFLEN)
-		go axfrWhitelist(zipChan, whitelistedChan, &wg)
+		go axfrWhitelist(zipChan, whitelistedChan)
 	} else {
 		whitelistedChan = zipChan
 	}
 
 	if !v6 {
 		ipVersionChan = make(chan zoneIP, MIDBUFLEN)
-		go axfrV4Only(whitelistedChan, ipVersionChan, &wg)
+		go axfrV4Only(whitelistedChan, ipVersionChan)
 	} else {
 		ipVersionChan = whitelistedChan
 	}
 
 	zipFilteredChan := ipVersionChan
 
-	publicAxfrMaster(db, zipFilteredChan, &wg)
+	publicAxfrMaster(db, zipFilteredChan)
 }

@@ -58,35 +58,38 @@ const (
 	spfModifierTypeUnknown
 )
 
-// ( "%{" macro-letter transformers *delimiter "}" ) / "%%" / "%_" / "%-"
-// c/r/t excluded, explanation-string only
-var macroExpand = `(?:%{[slodiphv][0-9]*r?[-.+,/_=]*}|%[%_-])`
+const (
+	// ( "%{" macro-letter transformers *delimiter "}" ) / "%%" / "%_" / "%-"
+	// c/r/t excluded, explanation-string only
+	macroExpand = `%{[slodiphv][0-9]*r?[-.+,/_=]*}|%[%_-]`
+	// ( *alphanum ALPHA *alphanum ) / ( 1*alphanum "-" *( alphanum / "-" ) alphanum )
+	topLabel = `(?i:[a-z0-9]*[a-z][a-z0-9]*|[a-z0-9]+-[a-z0-9-]*[a-z0-9])`
+	// ( "." toplabel [ "." ] ) / macro-expand
+	domainEnd = `(?:\.` + topLabel + `\.?|` + macroExpand + `)`
+	// *( macro-expand / macro-literal )
+	macroString = `(?:` + macroExpand + `|[!-$&-~])*`
 
-// ( *alphanum ALPHA *alphanum ) / ( 1*alphanum "-" *( alphanum / "-" ) alphanum )
-var topLabel = `(?i:[a-z0-9]*[a-z][a-z0-9]*|[a-z0-9]+-[a-z0-9-]*[a-z0-9])`
+	ipv4Cidr = `/(?:3[0-2]|[12]?[0-9])`
+	ipv6Cidr = `/(?:12[0-8]|(?:1[01]|[1-9])?[0-9])`
+	dualCidr = `(?P<v4cidr>` + ipv4Cidr + `)?(?:/(?P<v6cidr>` + ipv6Cidr + `))?`
+)
 
-// ( "." toplabel [ "." ] ) / macro-expand
-var domainEnd = `(?:\.` + topLabel + `\.?|` + macroExpand + `)`
+var (
+	patternName        = compileExactMatch(`(?i)[a-z][a-z0-9_.-]*`)
+	patternMacroString = compileExactMatch(macroString)
+	patternIPv4CIDR    = compileExactMatch(ipv4Cidr)
+	patternIPv6CIDR    = compileExactMatch(ipv6Cidr)
+	patternDualCidr    = compileExactMatch(dualCidr)
+	patternRecord      = compileExactMatch(`v=spf1(?P<terms>(?: +[^ ]+)+)? *`)
+	patternDirective   = compileExactMatch(`(?P<qualifier>[+?~-]?)(?P<mechanism>(?i)i(?:nclude|p[46])|a(?:ll)?|exists|ptr|mx)(?P<remainder>.*)`)
+	patternDomainSpec  = compileExactMatch(macroString + domainEnd)
+)
 
-// *( macro-expand / macro-literal )
-var macroString = `(?:` + macroExpand + `|[!-$&-~])*`
-
-var ipv4Cidr = `(?:/(?:3[0-2]|[12]?[0-9]))`
-var ipv6Cidr = `(?:/(?:12[0-8]|(?:1[01]|[1-9])?[0-9]))`
-var dualCidr = `(?:(?P<v4cidr>` + ipv4Cidr + `)?(?:/(?P<v6cidr>` + ipv6Cidr + `))?)`
-
-var patternName = compileExactMatch(`(?i)[a-z][a-z0-9_.-]*`)
-var patternMacroString = compileExactMatch(macroString)
-var patternIPv4CIDR = compileExactMatch(ipv4Cidr)
-var patternIPv6CIDR = compileExactMatch(ipv6Cidr)
-var patternDualCidr = compileExactMatch(dualCidr)
-var patternRecord = compileExactMatch(`(?:v=spf1)(?P<terms>(?: +[^ ]+)+)? *`)
-var patternDirective = compileExactMatch(`(?P<qualifier>[+?~-]?)(?P<mechanism>(?i)i(?:nclude|p[46])|a(?:ll)?|exists|ptr|mx)(?P<remainder>.*)`)
-var patternDomainSpec = compileExactMatch(`(?:` + macroString + domainEnd + `)`)
-
-var patternDualCidrMap = getPatternNameMap(patternDualCidr)
-var patternRecordMap = getPatternNameMap(patternRecord)
-var patternDirectiveMap = getPatternNameMap(patternDirective)
+var (
+	patternDualCidrMap  = getPatternNameMap(patternDualCidr)
+	patternRecordMap    = getPatternNameMap(patternRecord)
+	patternDirectiveMap = getPatternNameMap(patternDirective)
+)
 
 type spfData struct {
 	terms      []any
@@ -164,6 +167,7 @@ extractDataL:
 				continue
 			}
 		}
+		name = strings.ToLower(name)
 		if isSPFName {
 			data.spfNames = append(data.spfNames, name)
 		} else {

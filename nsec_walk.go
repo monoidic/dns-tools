@@ -15,9 +15,9 @@ type middleFunc func([]string) []string
 type walkZone struct {
 	zone            string
 	id              int64
-	unhandledRanges map[string]bool
+	unhandledRanges Set[string]
 	knownRanges     [][2]string // sorted list of ranges; ends with (<last_record>, "")
-	subdomains      map[string]bool
+	subdomains      Set[string]
 	rrTypes         map[string][]string
 }
 
@@ -168,11 +168,11 @@ func (wz *walkZone) addKnown(rr dns.NSEC) bool {
 }
 
 func (wz *walkZone) addUnhandled(start, end string) {
-	wz.unhandledRanges[fmt.Sprintf("%s|%s", start, end)] = true
+	wz.unhandledRanges.Set(fmt.Sprintf("%s|%s", start, end))
 }
 
 func (wz *walkZone) isUnhandled(start, end string) bool {
-	return wz.unhandledRanges[fmt.Sprintf("%s|%s", start, end)]
+	return wz.unhandledRanges.Contains(fmt.Sprintf("%s|%s", start, end))
 }
 
 func (wz *walkZone) nextUnknownRange() (string, string, bool) {
@@ -216,7 +216,7 @@ func (wz *walkZone) nextUnknownRange() (string, string, bool) {
 	return "", "", false
 }
 
-func nsecWalkWorker(zoneChan <-chan fieldData, dataOutChan chan<- walkZone, wg *sync.WaitGroup, once *sync.Once) {
+func nsecWalkWorker(zoneChan <-chan fieldData, dataOutChan chan<- walkZone, wg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -232,12 +232,12 @@ func nsecWalkWorker(zoneChan <-chan fieldData, dataOutChan chan<- walkZone, wg *
 	msgSetSize(&msg)
 	msg.Extra[0].(*dns.OPT).SetDo()
 
-	resolverWorker(zoneChan, dataOutChan, msg, nsecWalkQuery, wg, once)
+	resolverWorker(zoneChan, dataOutChan, msg, nsecWalkQuery, wg)
 }
 
 func nsecWalkQuery(connCache connCache, msg dns.Msg, zd fieldData) walkZone {
 	zone := zd.name
-	wz := walkZone{zone: zone, id: zd.id, unhandledRanges: make(map[string]bool), rrTypes: make(map[string][]string), subdomains: make(map[string]bool)}
+	wz := walkZone{zone: zone, id: zd.id, unhandledRanges: make(Set[string]), rrTypes: make(map[string][]string), subdomains: make(Set[string])}
 	// fmt.Printf("starting walk on zone %s\n", zone)
 
 	for start, end, ok := wz.nextUnknownRange(); ok; start, end, ok = wz.nextUnknownRange() {
@@ -274,7 +274,7 @@ func nsecWalkQuery(connCache connCache, msg dns.Msg, zd fieldData) walkZone {
 					normalizeRR(rrT)
 					if soaZone := rrT.Hdr.Name; dns.Compare(zone, soaZone) != 0 && dns.IsSubDomain(zone, soaZone) {
 						// fmt.Printf("found subdomain %s of domain %s\n", soaZone, zone)
-						wz.subdomains[soaZone] = true
+						wz.subdomains.Set(soaZone)
 						foundSubdomains = true
 					}
 				}
@@ -313,7 +313,7 @@ func nsecWalkQuery(connCache connCache, msg dns.Msg, zd fieldData) walkZone {
 	return wz
 }
 
-func nsecWalkMaster(db *sql.DB, zoneChan <-chan fieldData, wg *sync.WaitGroup) {
+func nsecWalkMaster(db *sql.DB, zoneChan <-chan fieldData) {
 	tablesFields := map[string]string{
 		"name":    "name",
 		"rr_type": "name",
@@ -326,14 +326,14 @@ func nsecWalkMaster(db *sql.DB, zoneChan <-chan fieldData, wg *sync.WaitGroup) {
 		"name_to_zone": "UPDATE name SET is_zone=TRUE WHERE id=?",
 	}
 
-	netWriter(db, zoneChan, wg, tablesFields, namesStmts, nsecWalkWorker, nsecWalkInsert)
+	netWriter(db, zoneChan, tablesFields, namesStmts, nsecWalkWorker, nsecWalkInsert)
 }
 
 func nsecWalkResults(db *sql.DB) {
 	readerWriter("fetching zone walk results", db, getUnqueriedNsecRes, nsecWalkResWriter)
 }
 
-func nsecWalkResWriter(db *sql.DB, inChan <-chan rrDBData, wg *sync.WaitGroup) {
+func nsecWalkResWriter(db *sql.DB, inChan <-chan rrDBData) {
 	tablesFields := map[string]string{
 		"name":     "name",
 		"rr_type":  "name",
@@ -345,7 +345,7 @@ func nsecWalkResWriter(db *sql.DB, inChan <-chan rrDBData, wg *sync.WaitGroup) {
 		"queried": "UPDATE zone_walk_res SET queried=TRUE WHERE id=?",
 	}
 
-	netWriter(db, inChan, wg, tablesFields, namesStmts, nsecWalkResultResolver, nsecWalkResWrite)
+	netWriter(db, inChan, tablesFields, namesStmts, nsecWalkResultResolver, nsecWalkResWrite)
 }
 
 func nsecWalkResWrite(tableMap TableMap, stmtMap StmtMap, res nsecWalkResolveRes) {
@@ -383,7 +383,7 @@ func nsecWalkInsert(tableMap TableMap, stmtMap StmtMap, zw walkZone) {
 
 		for _, rrType := range rrtL {
 			if rrType == "NS" {
-				zw.subdomains[rrName] = true
+				zw.subdomains.Set(rrName)
 			}
 
 			rrTypeID := tableMap.get("rr_type", rrType)

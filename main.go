@@ -74,6 +74,8 @@ var flags = map[string]*flagData{
 	"validate":          {description: "check if zones are valid", function: validateZones},
 	"spf":               {description: "attempt to fetch SPF records", function: spf},
 	"spf_links":         {description: "attempt to fetch linked SPF records", function: spfLinks},
+	"dmarc":             {description: "attempt to fetch DMARC records", function: dmarc},
+	"chaos":             {description: "attempt to get info on authoritative nameservers themselves", function: chaosTXT},
 	"maybe_zone":        {description: "check whether \"maybe-zone\" names are zones", function: maybeZone},
 }
 
@@ -87,13 +89,15 @@ var (
 		"nsec_map", "zone_walk", "zone_walk_results",
 		"axfr", "psl", "validate", "parent_map", "parent_ns",
 		"unregistered", "spf", "spf_links",
-		"maybe_zone",
+		"dmarc",
+		"maybe_zone", "chaos",
 	}
-	publicDnsFlags = []string{"arpa_v4", "arpa_v6", "net_ip", "net_mx", "net_ns", "nsec_map", "net_ptr", "spf", "spf_links", "unregistered", "zone_walk", "zone_walk_results"}
-	directConns    = []string{"axfr", "check_up", "parent_ns"}
+	publicDnsFlags = []string{"arpa_v4", "arpa_v6", "net_ip", "net_mx", "net_ns", "nsec_map", "net_ptr", "spf", "spf_links", "unregistered", "zone_walk", "zone_walk_results", "dmarc"}
+	directConns    = []string{"axfr", "check_up", "parent_ns", "chaos"}
 )
 
 func main() {
+	flagsCheck()
 	for flagName, flagD := range flags {
 		flag.BoolVar(&flagD.doAction, flagName, false, flagD.description)
 	}
@@ -112,15 +116,15 @@ func main() {
 	flag.Parse()
 	args = flag.Args()
 
-	if (networksFile == "" && netCC != "") || (networksFile != "" && netCC == "") {
-		fmt.Fprint(os.Stderr, "enter none or both of net_file and cc\n")
+	if !((networksFile == "" && netCC == "") || (networksFile != "" && netCC != "")) {
 		flag.Usage()
+		fmt.Fprint(os.Stderr, "\nenter none or both of net_file and cc\n")
 		os.Exit(1)
 	}
 
 	if !(anyFlagSet()) {
-		fmt.Fprint(os.Stderr, "enter at least one action to perform\n")
 		flag.Usage()
+		fmt.Fprint(os.Stderr, "\nenter at least one action to perform\n")
 		os.Exit(1)
 	}
 
@@ -171,4 +175,16 @@ func anyFlagSet() bool {
 		}
 	}
 	return false
+}
+
+func flagsCheck() {
+	if len(flagOrder) != len(flags) {
+		panic("length mismatch between flagOrder and flags")
+	}
+
+	for _, flag := range flagOrder {
+		if _, ok := flags[flag]; !ok {
+			panic("flag " + flag + " from flagOrder has typo? missing from flags")
+		}
+	}
 }

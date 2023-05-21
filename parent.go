@@ -2,7 +2,6 @@ package main
 
 import (
 	"database/sql"
-	"sync"
 
 	"github.com/monoidic/dns"
 )
@@ -44,14 +43,13 @@ func mapZoneParents(db *sql.DB) {
 	readerWriter("mapping zone parents", db, getParentCheck, parentCheck)
 }
 
-func parentCheck(db *sql.DB, inChan <-chan fieldData, wg *sync.WaitGroup) {
+func parentCheck(db *sql.DB, inChan <-chan fieldData) {
 	tablesFields := map[string]string{
 		"name": "name",
 	}
 
 	namesStmts := map[string]string{
 		"set_zone":    "UPDATE name SET is_zone=TRUE WHERE id=?",
-		"set_unreg":   "UPDATE name SET reg_checked=TRUE, registered=FALSE WHERE id=?",
 		"mapped":      "UPDATE name SET parent_mapped=TRUE WHERE id=?",
 		"name_parent": "UPDATE name SET parent_id=? WHERE id=?",
 	}
@@ -59,7 +57,7 @@ func parentCheck(db *sql.DB, inChan <-chan fieldData, wg *sync.WaitGroup) {
 	cpChan := make(chan childParent, MIDBUFLEN)
 	go addChildParent(inChan, cpChan)
 
-	netWriterTable(db, cpChan, wg, tablesFields, namesStmts, parentCheckWorker, parentCheckWriter)
+	netWriterTable(db, cpChan, tablesFields, namesStmts, parentCheckWorker, parentCheckWriter)
 }
 
 func addChildParent(inChan <-chan fieldData, outChan chan<- childParent) {
@@ -79,13 +77,12 @@ func parentCheckWriter(tableMap TableMap, stmtMap StmtMap, res childParent) {
 	if res.resolved && res.parentGuess != "" {
 		parentID := res.parent.id
 
-		if res.registered {
-			if parentID == 0 {
-				parentID = tableMap.get("name", res.parent.name)
+		if parentID == 0 {
+			name := res.parentGuess
+			if res.registered {
+				name = res.parent.name
 			}
-		} else {
-			parentID = tableMap.get("name", res.parentGuess)
-			stmtMap.exec("set_unreg", parentID)
+			parentID = tableMap.get("name", name)
 		}
 
 		stmtMap.exec("set_zone", parentID)
