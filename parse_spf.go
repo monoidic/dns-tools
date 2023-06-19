@@ -99,22 +99,21 @@ type spfData struct {
 }
 
 type spfDirective struct {
-	qualifier spfQualifier
-	mechanism spfMechanism
-
 	name        string // cannot be empty, if it exists; check existence with domain == ""
+	address     netip.Addr
 	isMacroName bool
+	qualifier   spfQualifier
+	mechanism   spfMechanism
 	v4cidr      uint8
 	v6cidr      uint8
 	hasV4Cidr   bool
 	hasV6Cidr   bool
-	address     netip.Addr
 }
 
 type spfModifier struct {
-	modType     spfModifierType
 	key         string // only for spfModifierTypeUnknown
 	spec        string
+	modType     spfModifierType
 	isMacroName bool
 }
 

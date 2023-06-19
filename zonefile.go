@@ -53,8 +53,8 @@ func readZonefiles(zoneDataChan <-chan zoneData, rrDataChan chan<- rrData, wg *s
 
 		fmt.Printf("inserted %s\n", zoneName)
 		check(fp.Close())
-		wg.Done()
 	}
+	wg.Done()
 }
 
 func parseZoneFiles(db *sql.DB) {
@@ -68,28 +68,25 @@ func parseZoneFiles(db *sql.DB) {
 	pattern := regexp.MustCompile("zones/([a-z0-9.-]+)zone")
 	rrDataChan := make(chan rrData, BUFLEN)
 	zoneDataChan := make(chan zoneData, BUFLEN)
+
+	go func(matches []string) {
+		for _, match := range matches {
+			reMatch := pattern.FindAllStringSubmatch(match, 1)
+			zone := reMatch[0][1]
+
+			zoneDataChan <- zoneData{filename: match, zone: zone}
+		}
+		close(zoneDataChan)
+	}(matches)
+
 	var wg sync.WaitGroup
+	wg.Add(numProcs)
 
-	go insertRRWorker(db, rrDataChan, &wg)
-
-	wg.Add(len(matches))
-
-	for i := 0; i < NUMPROCS; i++ {
+	for i := 0; i < numProcs; i++ {
 		go readZonefiles(zoneDataChan, rrDataChan, &wg)
 	}
 
-	for _, match := range matches {
-		reMatch := pattern.FindAllStringSubmatch(match, 1)
-		zone := reMatch[0][1]
+	go closeChanWait(&wg, rrDataChan)
 
-		zoneDataChan <- zoneData{filename: match, zone: zone}
-	}
-
-	wg.Wait()
-	// producers done, stop workers
-	close(zoneDataChan) // stop readZonefiles workers
-	wg.Add(1)
-	close(rrDataChan) // stop insertRRWorker
-	wg.Wait()
-	// all threads stopped, done
+	insertRRWorker(db, rrDataChan)
 }

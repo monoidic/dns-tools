@@ -191,13 +191,13 @@ type dmarcRecord struct {
 	sp        dmarcPolicy
 	rua       string
 	ruf       string
+	rf        string
+	interval  uint32
+	entryMask dmarcTagMask
 	adkim     dmarcAlignment
 	aspf      dmarcAlignment
-	interval  uint32
 	fo        dmarcFoMask
-	rf        string
 	pct       uint8
-	entryMask dmarcTagMask
 }
 
 func parseDmarc(s string) (dmarcRecord, error) {

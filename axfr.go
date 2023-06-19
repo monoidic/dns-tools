@@ -135,9 +135,7 @@ func publicAxfrMaster(db *sql.DB, zipChan <-chan zoneIP) {
 
 	go closeChanWait(&wg, rrDataChan)
 
-	var dummyWg sync.WaitGroup
-	dummyWg.Add(1)
-	insertRRWorker(db, rrDataChan, &dummyWg)
+	insertRRWorker(db, rrDataChan)
 }
 
 // filter out whitelisted zones or nameserver IPs

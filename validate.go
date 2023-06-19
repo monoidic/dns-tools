@@ -22,8 +22,8 @@ const (
 
 type zoneValid struct {
 	fieldData // child zone
-	status    tldStatus
 	eTLDplus1 string
+	status    tldStatus
 }
 
 type zoneMaybe struct {

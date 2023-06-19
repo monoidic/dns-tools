@@ -22,9 +22,9 @@ type arpaResults struct {
 
 // arpa PTR name, whether it gave a NXDOMAIN response, and its nameservers
 type arpaResult struct {
-	nxdomain bool
 	name     string
 	NSes     []dns.NS
+	nxdomain bool
 }
 
 // simple cidranger.RangerEntry implementation, with a boolean marking whether it matches
@@ -225,10 +225,10 @@ func arpaWrite(tableMap TableMap, stmtMap StmtMap, datum arpaResults) {
 	for _, result := range datum.results {
 		if !result.nxdomain {
 			fmt.Printf("new root %s\n", result.name)
-			ent := len(result.NSes) == 0
-			stmtMap.exec("add_root", result.name, ent)
+			emptyNonTerminal := len(result.NSes) == 0
+			stmtMap.exec("add_root", result.name, emptyNonTerminal)
 
-			if !ent {
+			if !emptyNonTerminal {
 				rrTypeID := tableMap.get("rr_type", "NS")
 				for _, ns := range result.NSes {
 					rrNameID := tableMap.get("rr_name", ns.Hdr.Name)
@@ -290,22 +290,6 @@ func ptrToIP(s string) (netip.Addr, error) {
 		return netip.Addr{}, Error{s: fmt.Sprintf("invalid addr: %q", s)}
 	}
 	return netip.ParseAddr(s)
-}
-
-// reverse an ASCII string
-func reverseASCII(s string) string {
-	b := []byte(s)
-	reverseList(b)
-	return string(b)
-}
-
-// reverse a list
-func reverseList[T any](l []T) {
-	lLen := len(l)
-	for i := 0; i < lLen/2; i++ {
-		i2 := lLen - i - 1
-		l[i], l[i2] = l[i2], l[i]
-	}
 }
 
 // initialize recursive enumeration with root

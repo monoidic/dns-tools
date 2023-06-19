@@ -32,14 +32,6 @@ var mnameBlacklistSuffixes []string = []string{
 	// "ultradns.com.",
 }
 
-func makeSet[valueType comparable](l []valueType) Set[valueType] {
-	ret := make(Set[valueType])
-	for _, k := range l {
-		ret.Set(k)
-	}
-	return ret
-}
-
 // TODO try to check nsecS itself and/or improve blacklist
 func checkBlacklisted(mname, rname string) bool {
 	if rnameBlacklist.Contains(rname) {

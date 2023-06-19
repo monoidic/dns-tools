@@ -5,11 +5,9 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"math/rand"
 	"os"
 	"runtime"
 	"strings"
-	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -21,8 +19,6 @@ const (
 	CHUNKSIZE = 100_000
 )
 
-var NUMPROCS = runtime.GOMAXPROCS(0)
-
 var (
 	args         []string
 	tcpOnly      bool
@@ -30,6 +26,7 @@ var (
 	tldZone      bool
 	networksFile string
 	netCC        string
+	numProcs     int
 )
 
 func check(err error) {
@@ -44,9 +41,9 @@ func check1[T any](arg1 T, err error) T {
 }
 
 type flagData struct {
-	doAction    bool
 	description string
 	function    func(*sql.DB)
+	doAction    bool
 }
 
 var flags = map[string]*flagData{
@@ -92,8 +89,7 @@ var (
 		"dmarc",
 		"maybe_zone", "chaos",
 	}
-	publicDnsFlags = []string{"arpa_v4", "arpa_v6", "net_ip", "net_mx", "net_ns", "nsec_map", "net_ptr", "spf", "spf_links", "unregistered", "zone_walk", "zone_walk_results", "dmarc"}
-	directConns    = []string{"axfr", "check_up", "parent_ns", "chaos"}
+	directConns = []string{"axfr", "check_up", "parent_ns", "chaos"}
 )
 
 func main() {
@@ -112,6 +108,7 @@ func main() {
 	flag.BoolVar(&v6, "v6", false, "allow implicit v6 connections (e.g AXFR)")
 	flag.BoolVar(&allowDirectConns, "direct_conns", false, "allow direct connections to servers besides the configured nameservers")
 	flag.BoolVar(&tldZone, "tld_zone", false, "treat parsed zone files as up-to-date zone file from TLD")
+	flag.IntVar(&numProcs, "num_procs", runtime.GOMAXPROCS(0), "number of parallel threads to use for a variety of tasks")
 
 	flag.Parse()
 	args = flag.Args()
@@ -150,14 +147,6 @@ func main() {
 	db := check1(sql.Open("sqlite3", connstring))
 
 	initDb(db)
-
-	for _, key := range publicDnsFlags {
-		if flags[key].doAction {
-			// randomize ns (no cryptographically secure seed/random numbers needed)
-			rand.Seed(time.Now().UnixNano())
-			break
-		}
-	}
 
 	for _, flagKey := range flagOrder {
 		if flagD := flags[flagKey]; flagD.doAction {
