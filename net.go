@@ -321,8 +321,6 @@ func cookieFetcher(protoCache *ttlcache.Cache[string, *dns.Conn], client *dns.Cl
 
 			if cookie, err := fetchCookie(msg, client, conn); err == nil {
 				return c.Set(host, cookie, ttlcache.DefaultTTL)
-			} else {
-				fmt.Printf("cookie err: %s\n", err)
 			}
 			protoCache.Delete(host)
 		}
