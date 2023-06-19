@@ -307,11 +307,9 @@ func nsecWalkWorker(zoneChan <-chan fieldData, dataOutChan chan<- walkZone, wg *
 }
 
 // split NSEC search space into n=NUMPROCS sections, run in parallel, and merge
-func splitNsecWalk(connCache connCache, msg dns.Msg, zd fieldData) walkZone {
+func splitNsecWalk(_ connCache, msg dns.Msg, zd fieldData) walkZone {
 	zone := zd.name
 	wzch := make(chan walkZone, numProcs)
-	// per-worker conncaches
-	connCache.clear()
 
 	for _, sr := range splitAscii(zone, numProcs, 5) {
 		wz := walkZone{zone: zone, id: zd.id, unhandledRanges: make(Set[string]), rrTypes: make(map[string][]string), subdomains: make(Set[string])}
