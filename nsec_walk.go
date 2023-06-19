@@ -310,6 +310,8 @@ func nsecWalkWorker(zoneChan <-chan fieldData, dataOutChan chan<- walkZone, wg *
 func splitNsecWalk(connCache connCache, msg dns.Msg, zd fieldData) walkZone {
 	zone := zd.name
 	wzch := make(chan walkZone, numProcs)
+	// per-worker conncaches
+	connCache.clear()
 
 	for _, sr := range splitAscii(zone, numProcs, 5) {
 		wz := walkZone{zone: zone, id: zd.id, unhandledRanges: make(Set[string]), rrTypes: make(map[string][]string), subdomains: make(Set[string])}
@@ -319,7 +321,7 @@ func splitNsecWalk(connCache connCache, msg dns.Msg, zd fieldData) walkZone {
 			}
 		}
 
-		go nsecWalkQuery(connCache, msg, wz, wzch)
+		go nsecWalkQuery(getConnCache(), msg, wz, wzch)
 	}
 
 	ret := walkZone{zone: zone, id: zd.id, unhandledRanges: make(Set[string]), rrTypes: make(map[string][]string), subdomains: make(Set[string])}
@@ -416,6 +418,8 @@ func nsecWalkQuery(connCache connCache, msg dns.Msg, wz walkZone, wzch chan<- wa
 	if len(wz.unhandledRanges) > 0 {
 		fmt.Printf("unhandled in zone %s: %#v\n", wz.zone, wz.unhandledRanges)
 	}
+
+	connCache.clear()
 
 	wzch <- wz
 }
