@@ -242,28 +242,46 @@ func (wz *walkZone) addUnhandled(start, end string) {
 	wz.unhandledRanges.Add(fmt.Sprintf("%s|%s", start, end))
 }
 
+func (wz *walkZone) isUnhandled(start, end string) bool {
+	return wz.unhandledRanges.Contains(fmt.Sprintf("%s|%s", start, end))
+}
+
 func (wz *walkZone) nextUnknownRange() (string, string, bool) {
 	l := len(wz.knownRanges)
 	zone := wz.zone
 
 	if l == 0 {
-		return zone, "", true
+		if !wz.isUnhandled(zone, "") {
+			return zone, "", true
+		}
+		return "", "", false
 	}
 
 	firstName := wz.knownRanges[0][0]
-	if firstName != zone {
+	if firstName != zone && !wz.isUnhandled(zone, firstName) {
 		return zone, firstName, true
 	}
 
 	if l == 1 {
 		lastName := wz.knownRanges[0][1]
-		if lastName != "" {
+		if lastName != "" && !wz.isUnhandled(lastName, "") {
 			return lastName, "", true
 		}
 	} else {
-		start := wz.knownRanges[0][1]
-		end := wz.knownRanges[1][0]
-		return start, end, true
+		var last string
+		for i := 0; i < l-1; i++ {
+			start := wz.knownRanges[i][1]
+			end := wz.knownRanges[i+1][0]
+			last = wz.knownRanges[i+1][1]
+
+			if !wz.isUnhandled(start, end) {
+				return start, end, true
+			}
+		}
+
+		if last != "" && !wz.isUnhandled(last, "") {
+			return last, "", true
+		}
 	}
 
 	return "", "", false
@@ -392,7 +410,6 @@ func nsecWalkQuery(connCache connCache, msg dns.Msg, wz walkZone, wzch chan<- wa
 		if !expanded {
 			fmt.Printf("unhandled range start=%s end=%s on zone %s, ranges=%v\n", start, end, zone, wz.knownRanges)
 			wz.addUnhandled(start, end)
-			wz.addKnown(start, end, nil)
 		}
 	}
 
@@ -535,6 +552,20 @@ func getMiddle(zone, start, end string) []string {
 
 	var ret []string
 
+	if !(end == "" || end == ".") {
+		splitEnd := dns.SplitDomainName(end)
+		if splitEnd == nil {
+			panic(fmt.Sprintf("end splits to nil: %s", end))
+		}
+
+		for _, f := range []middleFunc{decrementLabel, nop} {
+			res := strings.Join(f(splitEnd), ".") + "."
+			if dns.IsSubDomain(zone, res) {
+				ret = append(ret, res)
+			}
+		}
+	}
+
 	if !(start == "" || start == ".") {
 		splitStart := dns.SplitDomainName(start)
 		if splitStart == nil {
@@ -544,16 +575,6 @@ func getMiddle(zone, start, end string) []string {
 		for _, f := range []middleFunc{minusAppended, nop, minusSubdomains, minusSubdomain, incrementLabel} {
 			res := strings.Join(f(splitStart), ".") + "."
 			if dns.IsSubDomain(zone, res) && dns.Compare(start, res) <= 0 && (end == "" || dns.Compare(res, end) == -1) {
-				ret = append(ret, res)
-			}
-		}
-	}
-
-	if !(end == "" || end == ".") {
-		splitEnd := dns.SplitDomainName(end)
-		for _, f := range []middleFunc{decrementLabel, nop} {
-			res := strings.Join(f(splitEnd), ".") + "."
-			if dns.IsSubDomain(zone, res) {
 				ret = append(ret, res)
 			}
 		}
