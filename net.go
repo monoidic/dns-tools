@@ -181,8 +181,8 @@ func getConnCache() connCache {
 
 // set up a cookie cache for connCache
 func getCookieCache(protoCache *ttlcache.Cache[string, *dns.Conn], client *dns.Client) *ttlcache.Cache[string, string] {
-	cookieF := cookieFetcher(protoCache, client)
-	ttlOption := ttlcache.WithTTL[string, string](5 * time.Minute)
+	cookieF := cookieGen(protoCache, client)
+	ttlOption := ttlcache.WithTTL[string, string](25 * time.Second)
 	cache := ttlcache.New(cookieF, ttlOption)
 	go cache.Start()
 	return cache
@@ -285,19 +285,8 @@ func connCacheLoader(client *dns.Client, proto string) ttlcache.Option[string, *
 	}))
 }
 
-// return ttlcache.WithLoader to fetch a DNS cookie for a given server, for the cookie cache in connCache
-func cookieFetcher(protoCache *ttlcache.Cache[string, *dns.Conn], client *dns.Client) ttlcache.Option[string, string] {
-	msg := dns.Msg{
-		MsgHdr: dns.MsgHdr{
-			Opcode:           dns.OpcodeQuery,
-			RecursionDesired: false,
-			Rcode:            dns.RcodeSuccess,
-		},
-		Question: []dns.Question{},
-	}
-
-	msgSetSize(&msg)
-
+// return ttlcache.WithLoader to generate a random DNS client cookie for the cookie cache in connCache
+func cookieGen(protoCache *ttlcache.Cache[string, *dns.Conn], client *dns.Client) ttlcache.Option[string, string] {
 	bufRand := make([]byte, 8)
 	bufStr := make([]byte, 16)
 	oRand := rand.New(rand.NewSource(rand.Int63()))
@@ -308,34 +297,9 @@ func cookieFetcher(protoCache *ttlcache.Cache[string, *dns.Conn], client *dns.Cl
 		return string(bufStr)
 	}
 
-	oCookie := msgAddCookie(&msg)
-
 	return ttlcache.WithLoader[string, string](ttlcache.LoaderFunc[string, string](func(c *ttlcache.Cache[string, string], host string) *ttlcache.Item[string, string] {
-		for i := 0; i < RETRIES; i++ {
-			connItem := protoCache.Get(host)
-			if connItem == nil {
-				return nil
-			}
-			conn := connItem.Value()
-			oCookie.Cookie = getRandCookie()
-
-			if cookie, err := fetchCookie(msg, client, conn); err == nil {
-				return c.Set(host, cookie, ttlcache.DefaultTTL)
-			}
-			protoCache.Delete(host)
-		}
-
-		return c.Set(host, "", ttlcache.DefaultTTL)
+		return c.Set(host, getRandCookie(), ttlcache.DefaultTTL)
 	}))
-}
-
-// request cookie from server
-func fetchCookie(msg dns.Msg, client *dns.Client, conn *dns.Conn) (cookie string, err error) {
-	if res, _, err := client.ExchangeWithConn(&msg, conn); err == nil {
-		return cookieFromMsg(res), nil
-	} else {
-		return "", err
-	}
 }
 
 // extract cookie from response message
