@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"math/rand"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 
@@ -190,7 +192,7 @@ func splitAscii(zone string, n, length int) []splitRange {
 	ret := make([]splitRange, n)
 
 	ret[0] = splitRange{
-		afterKnown: [2]string{steps[0], ""},
+		afterKnown: [2]string{steps[0], zone},
 	}
 	ret[n-1] = splitRange{
 		prevKnown: [2]string{zone, steps[n-2]},
@@ -199,7 +201,7 @@ func splitAscii(zone string, n, length int) []splitRange {
 	for i := 1; i < n-1; i++ {
 		ret[i] = splitRange{
 			prevKnown:  [2]string{zone, steps[i-1]},
-			afterKnown: [2]string{steps[i], ""},
+			afterKnown: [2]string{steps[i], zone},
 		}
 	}
 
@@ -226,7 +228,8 @@ func fractString(fract float64, length int) string {
 	return string(buf)
 }
 
-// return the element
+// inserts a value into an array at a given index;
+// same semantics as append()
 func arrInsert[T any](arr []T, index int, e T) []T {
 	var tmp []T
 	tmpLen := len(arr) + 1
@@ -242,8 +245,118 @@ func arrInsert[T any](arr []T, index int, e T) []T {
 	return tmp
 }
 
-// remove the element at a given index from the slice
-func arrRemove[T any](arr []T, index int) []T {
-	copy(arr[index:], arr[index+1:])
-	return arr[:len(arr)-1]
+func arrRemoveMulti[T any](arr []T, start, end int) []T {
+	if start == end {
+		return arr
+	}
+	if start > end {
+		log.Panicf("incorrect indices start=%d and end=%d on %v", start, end, arr)
+	}
+
+	numRemoved := end - start
+	newLen := len(arr) - numRemoved
+
+	copy(arr[start:], arr[end:])
+	return arr[:newLen]
+}
+
+// container for arbitrary ranges of values
+type RangeSet[T any] struct {
+	// the merged ranges
+	Ranges [][2]T
+	// a three-way comparison function like strcmp;
+	// 0 for equality, -1 for v1 < v2, 1 for v1 > v2
+	Compare func(v1, v2 T) int
+	// a sentinel value indicating wrapping around from this value to the start
+	// if HasWrap is true and the final value is this, then any value sorting after it
+	// is considered within the range
+	WrapV T
+	// whether or not there is a "wraparound value"
+	HasWrap bool
+}
+
+// helper to check whether a given value exists + return its index
+func (r *RangeSet[T]) containsI(v T) (bool, int) {
+	l := len(r.Ranges)
+	if l == 0 {
+		return false, 0
+	}
+
+	// whether or not the end of the last range is the wrap value
+	endWraps := r.HasWrap && r.Compare(r.Ranges[l-1][1], r.WrapV) == 0
+
+	i := sort.Search(l, func(i int) bool { return (endWraps && i == l-1) || r.Compare(r.Ranges[i][0], v) <= 0 })
+
+	rn := r.Ranges[i]
+	start, end := rn[0], rn[1]
+	// value is in the wrapped area or within the range
+	return (endWraps && i == l-1 && r.Compare(v, end) >= 0) || (r.Compare(v, end) == -1 && r.Compare(start, v) <= 0), i
+}
+
+// check whether a given value is contained within the range set
+func (r *RangeSet[T]) Contains(v T) bool {
+	ret, _ := r.containsI(v)
+	return ret
+}
+
+// check whether a range is contained within the range set
+func (r *RangeSet[T]) ContainsRange(start, end T) bool {
+	// a range is contained entirely if both the start and end exist
+	// and are contained within the same defined range
+	startMatch, startI := r.containsI(start)
+	if !startMatch {
+		return false
+	}
+	endMatch, endI := r.containsI(end)
+	return endMatch && startI == endI
+}
+
+// add a range, potentially expanding or merging existing ranges
+func (r *RangeSet[T]) Add(start, end T) {
+	l := len(r.Ranges)
+	if l == 0 {
+		// first range
+		r.Ranges = [][2]T{{start, end}}
+		return
+	}
+
+	// whether or not the end of the last range is the wrap value
+	endWraps := r.HasWrap && r.Compare(r.Ranges[l-1][1], r.WrapV) == 0
+
+	// index of the first range where the end of the range is greater than or equal to the given start value
+	// (or just the last existing range if wraparound is in use and it falls within it)
+	startI := sort.Search(l, func(i int) bool { return (endWraps && i == l-1) || r.Compare(r.Ranges[i][1], start) >= 0 })
+
+	// similar to startI, but for the end range
+	var endI int
+	if r.HasWrap && r.Compare(end, r.WrapV) == 0 {
+		// end is equal to the wrap value; always add to the end
+		endI = l
+	} else {
+		endI = sort.Search(l, func(i int) bool { return (endWraps && i == l-1) || r.Compare(r.Ranges[i][1], end) >= 0 })
+	}
+
+	if startI != l {
+		if r.Compare(start, r.Ranges[startI][0]) == 1 && ((r.HasWrap && r.Compare(r.Ranges[startI][1], r.WrapV) == 0) || r.Compare(start, r.Ranges[startI][1]) <= 0) {
+			// given start value is within a range
+			// extend left to the start of this range
+			start = r.Ranges[startI][0]
+		}
+
+		// only possible if startI != l; also implicitly impossible
+		// if end is the wrap value
+		if endI != l {
+			if r.Compare(end, r.Ranges[endI][0]) >= 0 {
+				// given end value is within a range
+				// extend right to the end of this range
+				end = r.Ranges[endI][1]
+				endI++
+			}
+		}
+	}
+
+	// remove (possibly empty) range of values which will be merged
+	r.Ranges = arrRemoveMulti(r.Ranges, startI, endI)
+	// insert (possibly merged from existing removed ranges) range
+	r.Ranges = arrInsert(r.Ranges, startI, [2]T{start, end})
 }
