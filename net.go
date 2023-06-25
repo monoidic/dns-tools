@@ -345,7 +345,7 @@ func plainResolve(msg dns.Msg, connCache connCache, nameserver string) (*dns.Msg
 		res, err = connCache.udpExchange(nameserver, msg)
 	}
 
-	if err != nil {
+	if err != nil || res.Truncated {
 		if tcpOnly {
 			return nil, err
 		}
