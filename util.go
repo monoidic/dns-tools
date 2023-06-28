@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"math"
 	"math/rand"
 	"reflect"
 	"sort"
@@ -210,6 +211,16 @@ func splitAscii(zone string, n, length int) []splitRange {
 
 const fractChars = "0123456789abcdefghijklmnopqrstuvwxyz"
 
+var fractIndexes = fractIndex()
+
+func fractIndex() map[rune]float64 {
+	ret := make(map[rune]float64, len(fractChars))
+	for i, c := range fractChars {
+		ret[c] = float64(i)
+	}
+	return ret
+}
+
 // convert a fraction [0-1) into a string
 func fractString(fract float64, length int) string {
 	buf := make([]byte, length)
@@ -226,6 +237,16 @@ func fractString(fract float64, length int) string {
 	}
 
 	return string(buf)
+}
+
+// converts a string into a fraction [0-1)
+func stringFract(s string) float64 {
+	var ret float64
+	for i, c := range s {
+		ret += fractIndexes[c] / math.Pow(float64(len(fractChars)), float64(i+1))
+		fmt.Printf("i=%d c=%c ret=%f\n", i, c, ret)
+	}
+	return ret
 }
 
 // inserts a value into an array at a given index;

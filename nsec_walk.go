@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"math/rand"
 	"strings"
 	"sync"
 
@@ -225,7 +226,6 @@ func nsecWalkQuery(connCache connCache, msg dns.Msg, wz walkZone, wzch chan<- wa
 		if !expanded {
 			fmt.Printf("unhandled range start=%s end=%s on zone %s, ranges=%v\n", start, end, zone, wz.knownRanges)
 			wz.addUnhandled(start, end)
-			wz.addKnown(start, end, nil)
 		}
 	}
 
@@ -367,9 +367,10 @@ func getMiddle(zone, start, end string) []string {
 	}
 
 	var ret []string
+	var splitEnd, splitStart []string
 
 	if !(end == zone || end == ".") {
-		splitEnd := dns.SplitDomainName(end)
+		splitEnd = dns.SplitDomainName(end)
 		if splitEnd == nil {
 			panic(fmt.Sprintf("end splits to nil: %s", end))
 		}
@@ -383,7 +384,7 @@ func getMiddle(zone, start, end string) []string {
 	}
 
 	if !(start == zone || start == ".") {
-		splitStart := dns.SplitDomainName(start)
+		splitStart = dns.SplitDomainName(start)
 		if splitStart == nil {
 			panic(fmt.Sprintf("start splits to nil: %s", start))
 		}
@@ -393,6 +394,18 @@ func getMiddle(zone, start, end string) []string {
 			if dns.IsSubDomain(zone, res) && dns.Compare(start, res) <= 0 && (end == zone || dns.Compare(res, end) == -1) {
 				ret = append(ret, res)
 			}
+		}
+	}
+
+	if !(splitStart == nil || splitEnd == nil) {
+		startF := stringFract(splitStart[0])
+		endF := stringFract(splitEnd[0])
+		rangeF := endF - startF
+		middleF := rand.Float64()*rangeF + startF
+		middleS := fractString(middleF, 10)
+		res := strings.Join(append([]string{middleS}, splitStart[1:]...), ".") + "."
+		if dns.IsSubDomain(zone, res) && dns.Compare(start, res) <= 0 && (end == zone || dns.Compare(res, end) == -1) {
+			ret = append(ret, res)
 		}
 	}
 
