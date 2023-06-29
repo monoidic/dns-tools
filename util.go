@@ -209,7 +209,7 @@ func splitAscii(zone string, n, length int) []splitRange {
 	return ret
 }
 
-const fractChars = "0123456789abcdefghijklmnopqrstuvwxyz"
+const fractChars = "0123456789-abcdefghijklmnopqrstuvwxyz"
 
 var fractIndexes = fractIndex()
 
