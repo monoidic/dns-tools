@@ -40,7 +40,6 @@ jobs:
     - run: printf 'nameserver 1.1.1.1\n' | sudo tee rootfs/etc/resolv.conf
     - run: sudo chroot rootfs /qemu-${{ matrix.arch }}-static /bin/sh /src/static.sh
 
-    - run: cp rootfs/src/dns-tools .
     - run: zip release.zip dns-tools
 
     - uses: actions/upload-release-asset@v1
