@@ -7,7 +7,7 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.22
 	github.com/monoidic/cidranger v1.0.4
 	github.com/monoidic/dns v1.1.52
-	github.com/monoidic/rangeset v0.0.0-20240430152212-a3e34f83a35c
+	github.com/monoidic/rangeset v0.0.0-20240430181632-369ba92b66da
 	golang.org/x/net v0.24.0
 )
 
