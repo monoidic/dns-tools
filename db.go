@@ -129,10 +129,10 @@ var initStmts = []string{
 	CREATE TABLE IF NOT EXISTS spf_name -- for DNS names scraped from the SPF record
 	(
 		id      INTEGER PRIMARY KEY,
-		spf_id  INTEGER NOT NULL REFERENCES spf(id),
+		spf_record_id  INTEGER NOT NULL REFERENCES spf_record(id),
 		name_id INTEGER NOT NULL REFERENCES name(id),
 		spfname INTEGER NOT NULL, -- bool, indicates names with additional spf records to fetch
-		UNIQUE(spf_id, name_id)
+		UNIQUE(spf_record_id, name_id)
 	)
 	`,
 	`

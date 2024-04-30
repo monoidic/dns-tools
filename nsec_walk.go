@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/monoidic/dns"
+	"github.com/monoidic/rangeset"
 )
 
 type middleFunc func([]string) []string
@@ -16,18 +17,18 @@ type walkZone struct {
 	zone            string
 	id              int64
 	unhandledRanges Set[string]
-	knownRanges     RangeSet[string]
+	knownRanges     rangeset.RangeSet[string]
 	subdomains      Set[string]
 	rrTypes         map[string][]string
 }
 
-func (wz *walkZone) addKnown(start, end string, bitmap []uint16) bool {
-	if !(start == wz.zone || strings.HasSuffix(start, "."+wz.zone)) { // subdomain check
+func (wz *walkZone) addKnown(rn rangeset.RangeEntry[string], bitmap []uint16) bool {
+	if !(rn.Start == wz.zone || strings.HasSuffix(rn.Start, "."+wz.zone)) { // subdomain check
 		return false
 		// TODO list these somewhere?
 	}
 
-	if wz.knownRanges.ContainsRange(start, end) {
+	if wz.knownRanges.ContainsRange(rn) {
 		return false
 	}
 
@@ -40,9 +41,9 @@ func (wz *walkZone) addKnown(start, end string, bitmap []uint16) bool {
 		}
 	}
 
-	wz.rrTypes[start] = nsecTypes
+	wz.rrTypes[rn.Start] = nsecTypes
 
-	wz.knownRanges.Add(start, end)
+	wz.knownRanges.Add(rn)
 
 	return true
 }
@@ -66,22 +67,22 @@ func (wz *walkZone) nextUnknownRange() (string, string, bool) {
 		return "", "", false
 	}
 
-	firstName := wz.knownRanges.Ranges[0][0]
+	firstName := wz.knownRanges.Ranges[0].Start
 	if firstName != zone && !wz.isUnhandled(zone, firstName) {
 		return zone, firstName, true
 	}
 
 	if l == 1 {
-		lastName := wz.knownRanges.Ranges[0][1]
+		lastName := wz.knownRanges.Ranges[0].End
 		if lastName != zone && !wz.isUnhandled(lastName, zone) {
 			return lastName, zone, true
 		}
 	} else {
 		var last string
 		for i := 0; i < l-1; i++ {
-			start := wz.knownRanges.Ranges[i][1]
-			end := wz.knownRanges.Ranges[i+1][0]
-			last = wz.knownRanges.Ranges[i+1][1]
+			start := wz.knownRanges.Ranges[i].End
+			end := wz.knownRanges.Ranges[i+1].Start
+			last = wz.knownRanges.Ranges[i+1].End
 
 			if !wz.isUnhandled(start, end) {
 				return start, end, true
@@ -127,11 +128,11 @@ func splitNsecWalk(_ connCache, msg dns.Msg, zd fieldData) walkZone {
 			unhandledRanges: make(Set[string]),
 			rrTypes:         make(map[string][]string),
 			subdomains:      make(Set[string]),
-			knownRanges:     RangeSet[string]{Compare: dns.Compare, HasWrap: true, WrapV: zone},
+			knownRanges:     rangeset.RangeSet[string]{Compare: dns.Compare, HasRWrap: true, RWrapV: zone},
 		}
 		for _, r := range [][2]string{sr.prevKnown, sr.afterKnown} {
 			if len(r[0])+len(r[1]) > 0 {
-				wz.addKnown(r[0], r[1], nil)
+				wz.addKnown(rangeset.RangeEntry[string]{Start: r[0], End: r[1]}, nil)
 			}
 		}
 
@@ -164,7 +165,7 @@ func nsecWalkQuery(connCache connCache, msg dns.Msg, wz walkZone, wzch chan<- wa
 
 	for start, end, ok := wz.nextUnknownRange(); ok; start, end, ok = wz.nextUnknownRange() {
 		// fmt.Printf("looping, start=%s end=%s known=%v\n", start, end, wz.knownRanges)
-		if len(wz.knownRanges.Ranges) == 1 && dns.Compare(wz.knownRanges.Ranges[0][0], wz.zone) == 0 && wz.knownRanges.Ranges[0][1] == wz.zone {
+		if len(wz.knownRanges.Ranges) == 1 && dns.Compare(wz.knownRanges.Ranges[0].Start, wz.zone) == 0 && wz.knownRanges.Ranges[0].End == wz.zone {
 			break
 		}
 		var expanded bool
@@ -210,7 +211,7 @@ func nsecWalkQuery(connCache connCache, msg dns.Msg, wz walkZone, wzch chan<- wa
 				switch rrT := rr.(type) {
 				case *dns.NSEC:
 					normalizeRR(rrT)
-					if wz.addKnown(rrT.Hdr.Name, rrT.NextDomain, rrT.TypeBitMap) {
+					if wz.addKnown(rangeset.RangeEntry[string]{Start: rrT.Hdr.Name, End: rrT.NextDomain}, rrT.TypeBitMap) {
 						// fmt.Printf("added entry %v\n", rrT)
 						expanded = true
 					}

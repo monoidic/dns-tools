@@ -100,7 +100,7 @@ func spfRRWriter(db *sql.DB, fdChan <-chan fieldData) {
 	}
 	namesStmts := map[string]string{
 		"spf":           "INSERT OR IGNORE INTO spf (name_id, spf_record_id) VALUES (?, ?)",
-		"spfname":       "INSERT INTO spf_name (name_id, spf_id, spfname) VALUES (?, (SELECT id FROM spf WHERE name_id=? AND spf_record_id=?), ?) ON CONFLICT DO UPDATE SET spfname=spfname|excluded.spfname",
+		"spfname":       "INSERT INTO spf_name (name_id, spf_record_id, spfname) VALUES (?, ?, ?) ON CONFLICT DO UPDATE SET spfname=spfname|excluded.spfname",
 		"spf_tried":     "UPDATE name SET spf_tried=TRUE WHERE id=?",
 		"spf_valid":     "UPDATE spf_record SET valid=?, any_unknown=?, error=? WHERE id=?",
 		"spf_duplicate": "UPDATE spf SET duplicate=TRUE WHERE name_id=? AND spf_record_id=?",
@@ -139,7 +139,7 @@ func spfWrite(tableMap TableMap, stmtMap StmtMap, fdr fdResults) {
 				spfName := i == 1
 				for _, name := range list {
 					spfNameID := tableMap.get("name", name)
-					stmtMap.exec("spfname", spfNameID, nameID, recordID, spfName)
+					stmtMap.exec("spfname", spfNameID, recordID, spfName)
 				}
 			}
 		}
