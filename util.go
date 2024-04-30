@@ -242,7 +242,6 @@ func stringFract(s string) float64 {
 	var ret float64
 	for i, c := range s {
 		ret += fractIndexes[c] / math.Pow(float64(len(fractChars)), float64(i+1))
-		fmt.Printf("i=%d c=%c ret=%f\n", i, c, ret)
 	}
 	return ret
 }
