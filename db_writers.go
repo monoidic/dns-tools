@@ -3,11 +3,12 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"iter"
 
-	"github.com/monoidic/dns"
+	"github.com/miekg/dns"
 )
 
-func insertRRWorker(db *sql.DB, rrDataChan <-chan rrData) {
+func insertRRWorker(db *sql.DB, seq iter.Seq[rrData]) {
 	tablesFields := map[string]string{
 		"name":     "name",
 		"rr_type":  "name",
@@ -23,7 +24,7 @@ func insertRRWorker(db *sql.DB, rrDataChan <-chan rrData) {
 		"self_parent_zone": "UPDATE zone2rr SET from_self=from_self|?, from_parent=from_parent|? WHERE zone_id=? AND rr_type_id=? AND rr_name_id=? AND rr_value_id=?",
 	}
 
-	insertRR(db, rrDataChan, tablesFields, namesStmts, insertRRW)
+	insertRR(db, seq, tablesFields, namesStmts, insertRRW)
 }
 
 func insertRRW(tableMap TableMap, stmtMap StmtMap, rrD rrData) {
@@ -61,7 +62,7 @@ func insertRRW(tableMap TableMap, stmtMap StmtMap, rrD rrData) {
 	}
 }
 
-func insertNSRR(db *sql.DB, rrChan <-chan rrDBData) {
+func insertNSRR(db *sql.DB, seq iter.Seq[rrDBData]) {
 	tablesFields := map[string]string{
 		"name": "name",
 	}
@@ -75,7 +76,7 @@ func insertNSRR(db *sql.DB, rrChan <-chan rrDBData) {
 		"parsed":          "UPDATE zone2rr SET parsed=TRUE WHERE id=?",
 	}
 
-	insertRR(db, rrChan, tablesFields, namesStmts, nsRRF)
+	insertRR(db, seq, tablesFields, namesStmts, nsRRF)
 }
 
 func nsRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
@@ -102,7 +103,7 @@ func nsRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
 	stmtMap.exec("parsed", ad.id)
 }
 
-func insertIPRR(db *sql.DB, rrChan <-chan rrDBData) {
+func insertIPRR(db *sql.DB, seq iter.Seq[rrDBData]) {
 	tablesFields := map[string]string{
 		"name": "name",
 		"ip":   "address",
@@ -113,7 +114,7 @@ func insertIPRR(db *sql.DB, rrChan <-chan rrDBData) {
 		"parsed":           "UPDATE zone2rr SET parsed=TRUE WHERE id=?",
 	}
 
-	insertRR(db, rrChan, tablesFields, namesStmts, ipRRF)
+	insertRR(db, seq, tablesFields, namesStmts, ipRRF)
 }
 
 func ipRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
@@ -141,7 +142,7 @@ func ipRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
 	stmtMap.exec("parsed", ad.id)
 }
 
-func insertMXRR(db *sql.DB, rrChan <-chan rrDBData) {
+func insertMXRR(db *sql.DB, seq iter.Seq[rrDBData]) {
 	tablesFields := map[string]string{
 		"name": "name",
 	}
@@ -151,7 +152,7 @@ func insertMXRR(db *sql.DB, rrChan <-chan rrDBData) {
 		"parsed":  "UPDATE zone2rr SET parsed=TRUE WHERE id=?",
 	}
 
-	insertRR(db, rrChan, tablesFields, namesStmts, mxRRF)
+	insertRR(db, seq, tablesFields, namesStmts, mxRRF)
 }
 
 func mxRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
@@ -168,7 +169,7 @@ func mxRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
 	stmtMap.exec("parsed", ad.id)
 }
 
-func insertPTRRR(db *sql.DB, rrChan <-chan rrDBData) {
+func insertPTRRR(db *sql.DB, seq iter.Seq[rrDBData]) {
 	tablesFields := map[string]string{
 		"ip":   "address",
 		"name": "name",
@@ -180,7 +181,7 @@ func insertPTRRR(db *sql.DB, rrChan <-chan rrDBData) {
 		"parsed":       "UPDATE zone2rr SET parsed=TRUE WHERE id=?",
 	}
 
-	insertRR(db, rrChan, tablesFields, namesStmts, ptrRRF)
+	insertRR(db, seq, tablesFields, namesStmts, ptrRRF)
 }
 
 func ptrRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {

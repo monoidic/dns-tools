@@ -5,21 +5,23 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"iter"
 	"math/rand"
 	"sync"
 	"time"
 
 	"github.com/jellydator/ttlcache/v3"
-	"github.com/monoidic/dns"
+	"github.com/miekg/dns"
 )
 
-type tableWorkerF[inType any, resultType any] func(inChan <-chan inType, outChan chan<- resultType, wg *sync.WaitGroup, tableMap TableMap, stmtMap StmtMap)
-type netWorkerF[inType any, resultType any] func(inChan <-chan inType, outChan chan<- resultType, wg *sync.WaitGroup)
-type insertF[resultType any] func(tableMap TableMap, stmtMap StmtMap, datum resultType)
-type readerF[inType any] func(db *sql.DB, inChan chan<- inType)
-type readerRecurseF[inType any] func(db *sql.DB, inChan chan<- inType, anyResponsesChan chan<- bool)
-type writerF[inType any] func(db *sql.DB, inChan <-chan inType)
-type processDataF[inType any, resultType any] func(c connCache, msg dns.Msg, fd inType) resultType
+type (
+	tableWorkerF[inType, resultType, tmpType any]     func(dataChan <-chan retryWrap[inType, tmpType], refeedChan chan<- retryWrap[inType, tmpType], outChan chan<- resultType, wg, retryWg *sync.WaitGroup, tableMap TableMap, stmtMap StmtMap)
+	netWorkerF[inType, resultType, tmpType any]       func(dataChan <-chan retryWrap[inType, tmpType], refeedChan chan<- retryWrap[inType, tmpType], outChan chan<- resultType, wg, retryWg *sync.WaitGroup)
+	insertF[resultType any]                           func(tableMap TableMap, stmtMap StmtMap, datum resultType)
+	readerRecurseF[inType any]                        func(db *sql.DB) (iter.Seq[inType], bool)
+	writerF[inType any]                               func(db *sql.DB, seq iter.Seq[inType])
+	processDataF[inType any, resultType, tmpType any] func(c connCache, msg dns.Msg, fd *retryWrap[inType, tmpType]) (resultType, error)
+)
 
 type mxData struct {
 	rrResults[dns.MX]
@@ -92,11 +94,10 @@ func (e Error) Error() string {
 
 // per-worker cache to reduce the number of connections to the same host made per worker
 type connCache struct {
-	client         *dns.Client
-	udpCache       *ttlcache.Cache[string, *dns.Conn]
-	tcpCache       *ttlcache.Cache[string, *dns.Conn]
-	udpCookieCache *ttlcache.Cache[string, string]
-	tcpCookieCache *ttlcache.Cache[string, string]
+	client      *dns.Client
+	udpCache    *ttlcache.Cache[string, *dns.Conn]
+	tcpCache    *ttlcache.Cache[string, *dns.Conn]
+	cookieCache *ttlcache.Cache[string, string]
 }
 
 var chaosTXTNames = []string{
@@ -154,34 +155,31 @@ func getConnCache() connCache {
 	tcpCache := ttlcache.New(ttlOption, tcpCacheF)
 	go tcpCache.Start()
 	tcpCache.OnEviction(connCacheEviction)
-	tcpCookieCache := getCookieCache(tcpCache, client)
+	cookieCache := getCookieCache()
 
 	var udpCacheF ttlcache.Option[string, *dns.Conn]
 	var udpCache *ttlcache.Cache[string, *dns.Conn]
-	var udpCookieCache *ttlcache.Cache[string, string]
 
 	if tcpOnly {
 		client.Net = "tcp"
 	} else {
 		udpCacheF = connCacheLoader(client, "udp")
 		udpCache = ttlcache.New(ttlOption, udpCacheF)
-		udpCookieCache = getCookieCache(udpCache, client)
 		go udpCache.Start()
 		udpCache.OnEviction(connCacheEviction)
 	}
 
 	return connCache{
-		client:         client,
-		tcpCache:       tcpCache,
-		tcpCookieCache: tcpCookieCache,
-		udpCache:       udpCache,
-		udpCookieCache: udpCookieCache,
+		client:      client,
+		cookieCache: cookieCache,
+		tcpCache:    tcpCache,
+		udpCache:    udpCache,
 	}
 }
 
 // set up a cookie cache for connCache
-func getCookieCache(protoCache *ttlcache.Cache[string, *dns.Conn], client *dns.Client) *ttlcache.Cache[string, string] {
-	cookieF := cookieGen(protoCache, client)
+func getCookieCache() *ttlcache.Cache[string, string] {
+	cookieF := cookieGen()
 	ttlOption := ttlcache.WithTTL[string, string](25 * time.Second)
 	cache := ttlcache.New(cookieF, ttlOption)
 	go cache.Start()
@@ -224,15 +222,15 @@ func exchange(hostname string, msg dns.Msg, cookieCache *ttlcache.Cache[string, 
 
 // perform DNS query, using caches, with TCP
 func (c connCache) tcpExchange(hostname string, msg dns.Msg) (*dns.Msg, error) {
-	return exchange(hostname, msg, c.tcpCookieCache, c.tcpCache, c.client)
+	return exchange(hostname, msg, c.cookieCache, c.tcpCache, c.client)
 }
 
 // perform DNS query, using caches, with UDP
 func (c connCache) udpExchange(hostname string, msg dns.Msg) (*dns.Msg, error) {
-	return exchange(hostname, msg, c.udpCookieCache, c.udpCache, c.client)
+	return exchange(hostname, msg, c.cookieCache, c.udpCache, c.client)
 }
 
-// check for cookie option in msg, create if missing, an return the message's cookie option
+// check for cookie option in msg, create if missing, and return the message's cookie option
 func msgAddCookie(msg *dns.Msg) *dns.EDNS0_COOKIE {
 	opt := setOpt(msg)
 	for _, rr := range opt.Option {
@@ -249,17 +247,17 @@ func msgAddCookie(msg *dns.Msg) *dns.EDNS0_COOKIE {
 
 // clean up connCache
 func (c connCache) clear() {
-	c.tcpCache.Stop()
-	c.tcpCache.DeleteAll()
-	c.tcpCookieCache.Stop()
-	c.tcpCookieCache.DeleteAll()
+	go clearTTLCache(c.tcpCache)
+	go clearTTLCache(c.cookieCache)
 
 	if !tcpOnly {
-		c.udpCache.Stop()
-		c.udpCache.DeleteAll()
-		c.udpCookieCache.Stop()
-		c.udpCookieCache.DeleteAll()
+		go clearTTLCache(c.udpCache)
 	}
+}
+
+func clearTTLCache[K comparable, V any](cache *ttlcache.Cache[K, V]) {
+	cache.Stop()
+	cache.DeleteAll()
 }
 
 // generate ttlcache.WithLoader function for a given protocol to connect to some host if a connection to a given host is not in the cache
@@ -270,7 +268,7 @@ func connCacheLoader(client *dns.Client, proto string) ttlcache.Option[string, *
 		var conn *dns.Conn
 		var err error
 
-		for i := 0; i < RETRIES; i++ {
+		for range RETRIES {
 			if conn, err = client.Dial(host); err == nil {
 				break
 			}
@@ -286,7 +284,7 @@ func connCacheLoader(client *dns.Client, proto string) ttlcache.Option[string, *
 }
 
 // return ttlcache.WithLoader to generate a random DNS client cookie for the cookie cache in connCache
-func cookieGen(protoCache *ttlcache.Cache[string, *dns.Conn], client *dns.Client) ttlcache.Option[string, string] {
+func cookieGen() ttlcache.Option[string, string] {
 	bufRand := make([]byte, 8)
 	bufStr := make([]byte, 16)
 	oRand := rand.New(rand.NewSource(rand.Int63()))
@@ -297,7 +295,7 @@ func cookieGen(protoCache *ttlcache.Cache[string, *dns.Conn], client *dns.Client
 		return string(bufStr)
 	}
 
-	return ttlcache.WithLoader[string, string](ttlcache.LoaderFunc[string, string](func(c *ttlcache.Cache[string, string], host string) *ttlcache.Item[string, string] {
+	return ttlcache.WithLoader(ttlcache.LoaderFunc[string, string](func(c *ttlcache.Cache[string, string], host string) *ttlcache.Item[string, string] {
 		return c.Set(host, getRandCookie(), ttlcache.DefaultTTL)
 	}))
 }
@@ -333,6 +331,10 @@ cookieFromMsgLoop:
 // close connCache connections on cache eviction
 func connCacheEviction(_ context.Context, _ ttlcache.EvictionReason, item *ttlcache.Item[string, *dns.Conn]) {
 	item.Value().Close()
+}
+
+func plainResolveRandom(msg dns.Msg, connCache connCache) (*dns.Msg, error) {
+	return plainResolve(msg, connCache, randomNS())
 }
 
 // perform basic DNS query, optionally with TCP fallback, to a namserver, while using connCache
@@ -383,33 +385,45 @@ func msgSetSize(msg *dns.Msg) {
 }
 
 // sets up a connCache and reads in messages from inChan, passes them to the specified `processData` function, and passes the output to outChan
-func resolverWorker[inType, resultType any](inChan <-chan inType, outChan chan<- resultType, msg dns.Msg, processData processDataF[inType, resultType], wg *sync.WaitGroup) {
+func resolverWorker[inType, resultType, tmpType any](dataChan <-chan retryWrap[inType, tmpType], refeedChan chan<- retryWrap[inType, tmpType], outChan chan<- resultType, msg dns.Msg, processData processDataF[inType, resultType, tmpType], wg, retryWg *sync.WaitGroup) {
 	connCache := getConnCache()
+	defer connCache.clear()
+	defer wg.Done()
 
 	// t := TIMEOUT
 	// client.DialTimeout = t
 	// client.ReadTimeout = t
 	// client.WriteTimeout = t
 
-	for fd := range inChan {
-		outChan <- processData(connCache, msg, fd)
+	for fd := range dataChan {
+		startStage := fd.stage
+		result, err := processData(connCache, msg, &fd)
+		if fd.stage != startStage {
+			fd.retriesLeft = RETRIES
+		}
+		if err == nil || fd.retriesLeft == 0 {
+			outChan <- result
+			retryWg.Done()
+		} else {
+			fd.retriesLeft--
+			go func(fd retryWrap[inType, tmpType]) {
+				refeedChan <- fd
+			}(fd)
+		}
 	}
-
-	connCache.clear()
-	wg.Done()
 }
 
 // bypass resolver if direct parent is already in DB
-func parentCheckFilter(inChan <-chan childParent, workerInChan chan<- childParent, tableMap TableMap) {
+func parentCheckFilter(inChan <-chan retryWrap[childParent, empty], workerInChan chan<- retryWrap[childParent, empty], tableMap TableMap) {
 	tableMap.wg.Add(1)
 	for cp := range inChan {
-		if cp.parentGuess == "" {
-			cp.resolved = true
-		} else if parentID := tableMap.roGet("name", cp.parentGuess); parentID != 0 {
-			cp.resolved = true
-			cp.registered = true
-			cp.parent.name = cp.parentGuess
-			cp.parent.id = parentID
+		if cp.val.parentGuess == "" {
+			cp.val.resolved = true
+		} else if parentID := tableMap.roGet("name", cp.val.parentGuess); parentID != 0 {
+			cp.val.resolved = true
+			cp.val.registered = true
+			cp.val.parent.name = cp.val.parentGuess
+			cp.val.parent.id = parentID
 		}
 		workerInChan <- cp
 	}
@@ -420,30 +434,35 @@ func parentCheckFilter(inChan <-chan childParent, workerInChan chan<- childParen
 // prints a message, creates a channel, reads entries of some type `inType` with a reader function
 // from the database into the channel and sends them over a channel to writerF,
 // which processes the entries and writes them back to the database
-func readerWriter[inType any](msg string, db *sql.DB, readerF readerF[inType], writerF writerF[inType]) {
+func readerWriter[inType any](msg string, db *sql.DB, seq iter.Seq[inType], writerF writerF[inType]) {
 	fmt.Println(msg)
-
-	inChan := make(chan inType, BUFLEN)
-
-	go readerF(db, inChan)
-	writerF(db, inChan)
+	writerF(db, bufferedSeq(seq, MIDBUFLEN))
 }
 
 // wrapper for netWriter for the common case of not needing to perform SQL queries within the resolver
-func netWriter[inType any, resultType any](db *sql.DB, inChan <-chan inType, tablesFields, namesStmts map[string]string, workerF netWorkerF[inType, resultType], insertF insertF[resultType]) {
-	netWriterTable(db, inChan, tablesFields, namesStmts, func(inChan <-chan inType, outChan chan<- resultType, wg *sync.WaitGroup, _ TableMap, _ StmtMap) {
-		workerF(inChan, outChan, wg)
-	}, insertF)
+func netWriter[inType, resultType, tmpType any](db *sql.DB, seq iter.Seq[inType], tablesFields, namesStmts map[string]string, workerF netWorkerF[inType, resultType, tmpType], insertF insertF[resultType]) {
+	wrappedWorkerF := func(dataChan <-chan retryWrap[inType, tmpType], refeedChan chan<- retryWrap[inType, tmpType], outChan chan<- resultType, wg, retryWg *sync.WaitGroup, _ TableMap, _ StmtMap) {
+		workerF(dataChan, refeedChan, outChan, wg, retryWg)
+	}
+	netWriterTable(db, seq, tablesFields, namesStmts, wrappedWorkerF, insertF)
 }
 
 // passes data from inChan (database entries) to `workerF` workers (network resolvers), and passes the output of that (DNS responses) to `insertF`,
 // which writes the results to the database
-func netWriterTable[inType any, resultType any](db *sql.DB, inChan <-chan inType, tablesFields, namesStmts map[string]string, workerF tableWorkerF[inType, resultType], insertF insertF[resultType]) {
+func netWriterTable[inType, resultType, tmpType any](db *sql.DB, seq iter.Seq[inType], tablesFields, namesStmts map[string]string, workerF tableWorkerF[inType, resultType, tmpType], insertF insertF[resultType]) {
 	numProcs := 64
 
 	dataOutChan := make(chan resultType, BUFLEN)
 
-	var workerWg sync.WaitGroup
+	var workerWg, retryWg sync.WaitGroup
+
+	inLow, inHigh, out, stop := priorityChanGen[retryWrap[inType, tmpType]]()
+	retryWrapper(bufferedSeq(seq, MIDBUFLEN), inLow, &retryWg)
+
+	go func() {
+		retryWg.Wait()
+		stop()
+	}()
 
 	tx := check1(db.Begin())
 
@@ -452,11 +471,11 @@ func netWriterTable[inType any, resultType any](db *sql.DB, inChan <-chan inType
 
 	workerWg.Add(numProcs)
 
-	for i := 0; i < numProcs; i++ {
-		go workerF(inChan, dataOutChan, &workerWg, tableMap, stmtMap)
+	for range numProcs {
+		go workerF(out, inHigh, dataOutChan, &workerWg, &retryWg, tableMap, stmtMap)
 	}
 
-	go closeChanWait(&workerWg, dataOutChan)
+	closeChanWait(&workerWg, dataOutChan)
 
 	i := CHUNKSIZE
 
@@ -485,42 +504,74 @@ func netWriterTable[inType any, resultType any](db *sql.DB, inChan <-chan inType
 	check(tx.Commit())
 }
 
+func retryWrapper[inType, resultType any](seq iter.Seq[inType], retryChan chan<- retryWrap[inType, resultType], wg *sync.WaitGroup) {
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for val := range seq {
+			wg.Add(1)
+			retryChan <- retryWrap[inType, resultType]{
+				val:         val,
+				retriesLeft: RETRIES,
+			}
+		}
+	}()
+}
+
 func resolveMX(db *sql.DB) {
-	readerWriter("resolving zone MX records", db, netZoneReaderGen("AND zone.mx_resolved=FALSE"), mxWriter)
+	readerWriter("resolving zone MX records", db, netZoneReader(db, "AND zone.mx_resolved=FALSE"), mxWriter)
 }
 
 func netNS(db *sql.DB) {
-	readerWriter("Adding zone NS mappings from the internet", db, netZoneReaderGen("AND zone.ns_resolved=FALSE"), netNSWriter)
+	readerWriter("Adding zone NS mappings from the internet", db, netZoneReader(db, "AND zone.ns_resolved=FALSE"), netNSWriter)
 }
 
 func netIP(db *sql.DB) {
-	readerWriter("Adding name-IP mappings from the internet", db, netResolvableReader, netIPWriter)
+	readerWriter("Adding name-IP mappings from the internet", db, getDbFieldData(`
+	SELECT name.name, id
+	FROM name
+	WHERE (is_ns=TRUE OR is_mx=TRUE) AND addr_resolved=FALSE
+`, db), netIPWriter)
 }
 
 func checkUp(db *sql.DB) {
-	readerWriter("Checking for active NSes", db, checkUpReader, checkUpWriter)
+	readerWriter("Checking for active NSes", db, checkUpReader(db), checkUpWriter)
 }
 
 func getParentNS(db *sql.DB) {
-	readerWriter("getting NS records from parent zone", db, netZoneReaderGen("AND glue_ns=FALSE"), parentNSWriter)
+	readerWriter("getting NS records from parent zone", db, netZoneReader(db, "AND glue_ns=FALSE"), parentNSWriter)
 }
 
 func rdns(db *sql.DB) {
-	readerWriter("getting rDNS results for IPs", db, rdnsIPReader, rdnsWriter)
+	readerWriter("getting rDNS results for IPs", db, getDbFieldData(`
+	SELECT address, id
+	FROM ip
+	WHERE rdns_mapped=FALSE
+`, db), rdnsWriter)
 }
 
 func spf(db *sql.DB) {
-	readerWriter("getting potential SPF records", db, getUnqueriedSPF, spfRRWriter)
+	readerWriter("getting potential SPF records", db, getDbFieldData(`
+	SELECT DISTINCT name.name, name.id
+	FROM name
+	INNER JOIN name_mx ON name_mx.name_id=name.id
+	WHERE name.spf_tried=FALSE
+`, db), spfRRWriter)
 }
 
 func spfLinks(db *sql.DB) {
-	readerWriter("getting linked SPF records", db, getUnqueriedSPFName, spfRRWriter)
+	readerWriter("getting linked SPF records", db, getDbFieldData(`
+	SELECT DISTINCT name.name, name.id
+	FROM name
+	INNER JOIN spf_name ON spf_name.name_id=name.id
+	WHERE spf_name.spfname=TRUE AND name.spf_tried=FALSE
+`, db), spfRRWriter)
 }
 
 func dmarc(db *sql.DB) {
-	readerWriter("getting potential DMARC records", db, getUnqueriedDMARCWrap, dmarcRRWriter)
+	readerWriter("getting potential DMARC records", db, getUnqueriedDMARC(db), dmarcRRWriter)
 }
 
 func chaosTXT(db *sql.DB) {
-	readerWriter("performing Chaosnet queries", db, getUnqueriedChaosTXT, chaosTXTWriter)
+	readerWriter("performing Chaosnet queries", db, getUnqueriedChaosTXT(db), chaosTXTWriter)
 }

@@ -2,10 +2,11 @@ package main
 
 import (
 	"database/sql"
+	"iter"
 	"strings"
 	"sync"
 
-	"github.com/monoidic/dns"
+	"github.com/miekg/dns"
 )
 
 const (
@@ -14,7 +15,7 @@ const (
 	hasNsec3
 )
 
-var rnameBlacklist Set[string] = makeSet([]string{
+var rnameBlacklist Set[string] = makeExactSet([]string{
 	// dns.cloudflare.com.",
 	// "awsdns-hostmaster.amazon.com.",
 	// "hostmaster.nsone.net.",
@@ -118,7 +119,7 @@ func getNsecState(nsec3param string, nsecSigs []dns.NSEC, nsec3Sigs []dns.NSEC3)
 	}
 }
 
-func checkNsecWorker(inChan <-chan fieldData, outChan chan<- fdResults, wg *sync.WaitGroup) {
+func checkNsecWorker(dataChan <-chan retryWrap[fieldData, empty], refeedChan chan<- retryWrap[fieldData, empty], outChan chan<- fdResults, wg, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -133,26 +134,23 @@ func checkNsecWorker(inChan <-chan fieldData, outChan chan<- fdResults, wg *sync
 	msgSetSize(&msg)
 	setOpt(&msg).SetDo()
 
-	resolverWorker(inChan, outChan, msg, checkNsecQuery, wg)
+	resolverWorker(dataChan, refeedChan, outChan, msg, checkNsecQuery, wg, retryWg)
 }
 
-func checkNsecQuery(connCache connCache, msg dns.Msg, fd fieldData) fdResults {
+func checkNsecQuery(connCache connCache, msg dns.Msg, fd *retryWrap[fieldData, empty]) (fdr fdResults, err error) {
 	var nsecState, rname, mname, nsec3param, nsecS string
-	var err error
 	var res *dns.Msg
 
-	msg.Question[0].Name = fd.name
+	msg.Question[0].Name = fd.val.name
 
-	for i := 0; i < RETRIES; i++ {
-		nameserver := randomNS()
-		res, err = plainResolve(msg, connCache, nameserver)
-		if err == nil {
-			break
-		}
+	res, err = plainResolveRandom(msg, connCache)
+	if err != nil {
+		return
 	}
 
-	if !(err == nil && res.Rcode == dns.RcodeSuccess) {
-		return fdResults{fieldData: fd} // empty
+	if res.Rcode != dns.RcodeSuccess {
+		fdr = fdResults{fieldData: fd.val} // empty
+		return
 	}
 
 nsec3paramLoop:
@@ -180,7 +178,8 @@ nsec3paramLoop:
 
 	if nsecState == "" { // no nsec/nsec3/nsec3param
 		// fmt.Printf("continue 2: no nsec info for %s\n", fd.name)
-		return fdResults{fieldData: fd}
+		fdr = fdResults{fieldData: fd.val}
+		return
 	}
 
 	var soaFound bool
@@ -200,34 +199,30 @@ soaLoop:
 		dnssecL := msg.Extra
 		msg.Extra = []dns.RR{}
 
-		for i := 0; i < RETRIES; i++ {
-			nameserver := randomNS()
-			res, err = plainResolve(msg, connCache, nameserver)
-			if err == nil {
-				break
-			}
-			// fmt.Printf("checkNsecQuery err 2: nameserver %s, name %s, err no. %d: %v\n", nameserver, fd.name, i, err)
+		res, err = plainResolveRandom(msg, connCache)
+		if err != nil {
+			return
 		}
+		// fmt.Printf("checkNsecQuery err 2: nameserver %s, name %s, err no. %d: %v\n", nameserver, fd.name, i, err)
 
 		msg.Question[0].Qtype = dns.TypeNSEC3PARAM
 		msg.Extra = dnssecL
 
-		if err == nil {
-		soaLoop2:
-			for _, rr := range res.Answer {
-				switch rrT := rr.(type) {
-				case *dns.SOA:
-					mname = rrT.Ns
-					rname = rrT.Mbox
-					soaFound = true
-					break soaLoop2
-				}
+	soaLoop2:
+		for _, rr := range res.Answer {
+			switch rrT := rr.(type) {
+			case *dns.SOA:
+				mname = rrT.Ns
+				rname = rrT.Mbox
+				soaFound = true
+				break soaLoop2
 			}
 		}
 
 		if !soaFound { // unable to find SOA, skip
 			// fmt.Printf("continue 3: unable to get SOA for %s\n", fd.name)
-			return fdResults{fieldData: fd}
+			fdr = fdResults{fieldData: fd.val}
+			return
 		}
 	}
 
@@ -235,10 +230,11 @@ soaLoop:
 		nsecState = "secure_nsec"
 	}
 
-	return fdResults{fieldData: fd, results: []string{nsecState, rname, mname, nsecS}}
+	fdr = fdResults{fieldData: fd.val, results: []string{nsecState, rname, mname, nsecS}}
+	return
 }
 
-func checkNsecMaster(db *sql.DB, zoneChan <-chan fieldData) {
+func checkNsecMaster(db *sql.DB, seq iter.Seq[fieldData]) {
 	tablesFields := map[string]string{
 		"nsec_state": "name",
 		"rname":      "name",
@@ -249,7 +245,7 @@ func checkNsecMaster(db *sql.DB, zoneChan <-chan fieldData) {
 		"update": "UPDATE name SET nsec_mapped=TRUE WHERE id=?",
 	}
 
-	netWriter(db, zoneChan, tablesFields, namesStmts, checkNsecWorker, checkNsecInsert)
+	netWriter(db, seq, tablesFields, namesStmts, checkNsecWorker, checkNsecInsert)
 }
 
 func checkNsecInsert(tableMap TableMap, stmtMap StmtMap, fd fdResults) {
@@ -268,5 +264,5 @@ func checkNsecInsert(tableMap TableMap, stmtMap StmtMap, fd fdResults) {
 }
 
 func checkNsec(db *sql.DB) {
-	readerWriter("checking NSEC security levels", db, netZoneReaderGen("AND zone.nsec_mapped=FALSE"), checkNsecMaster)
+	readerWriter("checking NSEC security levels", db, netZoneReader(db, "AND zone.nsec_mapped=FALSE"), checkNsecMaster)
 }

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/monoidic/dns"
+	"github.com/miekg/dns"
 )
 
 type zoneData struct {
@@ -17,6 +17,7 @@ type zoneData struct {
 }
 
 func readZonefiles(zoneDataChan <-chan zoneData, rrDataChan chan<- rrData, wg *sync.WaitGroup) {
+	defer wg.Done()
 	for zoneD := range zoneDataChan {
 		zoneName, filename := zoneD.zone, zoneD.filename
 		fp := check1(os.Open(filename))
@@ -54,7 +55,6 @@ func readZonefiles(zoneDataChan <-chan zoneData, rrDataChan chan<- rrData, wg *s
 		fmt.Printf("inserted %s\n", zoneName)
 		check(fp.Close())
 	}
-	wg.Done()
 }
 
 func parseZoneFiles(db *sql.DB) {
@@ -82,11 +82,11 @@ func parseZoneFiles(db *sql.DB) {
 	var wg sync.WaitGroup
 	wg.Add(numProcs)
 
-	for i := 0; i < numProcs; i++ {
+	for range numProcs {
 		go readZonefiles(zoneDataChan, rrDataChan, &wg)
 	}
 
-	go closeChanWait(&wg, rrDataChan)
+	closeChanWait(&wg, rrDataChan)
 
-	insertRRWorker(db, rrDataChan)
+	insertRRWorker(db, chanToSeq(rrDataChan))
 }

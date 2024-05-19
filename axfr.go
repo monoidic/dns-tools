@@ -3,11 +3,12 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"iter"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/monoidic/dns"
+	"github.com/miekg/dns"
 )
 
 // TODO this will end up with duplicates if some AXFR fails midway through;
@@ -66,6 +67,7 @@ func performAxfr(msg dns.Msg, rrDataChan chan<- rrData, ns string) error {
 
 // worker that
 func axfrWorker(zipChan <-chan zoneIP, rrDataChan chan<- rrData, wg *sync.WaitGroup) {
+	defer wg.Done()
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode: dns.OpcodeQuery,
@@ -83,7 +85,7 @@ func axfrWorker(zipChan <-chan zoneIP, rrDataChan chan<- rrData, wg *sync.WaitGr
 		msg.Question[0].Name = zone
 
 	axfrRetryLoop:
-		for i := 0; i < RETRIES; i++ {
+		for range RETRIES {
 			now := time.Now()
 			if err := performAxfr(msg, rrDataChan, ns); err == nil {
 				start := 0
@@ -116,11 +118,9 @@ func axfrWorker(zipChan <-chan zoneIP, rrDataChan chan<- rrData, wg *sync.WaitGr
 			msgtype: rrDataZoneAxfrTry,
 		}
 	}
-
-	wg.Done()
 }
 
-func publicAxfrMaster(db *sql.DB, zipChan <-chan zoneIP) {
+func publicAxfrMaster(db *sql.DB, seq iter.Seq[zoneIP]) {
 	numProcs := 64
 
 	rrDataChan := make(chan rrData, BUFLEN)
@@ -129,61 +129,57 @@ func publicAxfrMaster(db *sql.DB, zipChan <-chan zoneIP) {
 
 	wg.Add(numProcs)
 
-	for i := 0; i < numProcs; i++ {
-		go axfrWorker(zipChan, rrDataChan, &wg)
+	ch := seqToChan(seq, BUFLEN)
+
+	for range numProcs {
+		go axfrWorker(ch, rrDataChan, &wg)
 	}
 
-	go closeChanWait(&wg, rrDataChan)
+	closeChanWait(&wg, rrDataChan)
 
-	insertRRWorker(db, rrDataChan)
+	insertRRWorker(db, chanToSeq(rrDataChan))
 }
 
 // filter out whitelisted zones or nameserver IPs
-func axfrWhitelist(inChan <-chan zoneIP, outChan chan<- zoneIP) {
-	for zip := range inChan {
-		if !(AxfrWhitelistedZoneSet.Contains(zip.zone.name) || AxfrWhitelistedIPSet.Contains(zip.ip.name)) {
-			outChan <- zip
-		}
+func axfrWhitelist(seq iter.Seq[zoneIP]) iter.Seq[zoneIP] {
+	if len(AxfrWhitelistedZoneSet)+len(AxfrWhitelistedIPSet) == 0 {
+		return seq
 	}
 
-	close(outChan)
+	return func(yield func(zoneIP) bool) {
+		for zip := range seq {
+			if !(AxfrWhitelistedZoneSet.Contains(zip.zone.name) || AxfrWhitelistedIPSet.Contains(zip.ip.name)) {
+				if !yield(zip) {
+					return
+				}
+			}
+		}
+	}
 }
 
 // filter out IPv6 addresses
-func axfrV4Only(inChan <-chan zoneIP, outChan chan<- zoneIP) {
-	for zip := range inChan {
-		if strings.Contains(zip.ip.name, ".") { // ipv4
-			outChan <- zip
-		}
+func axfrV4Only(seq iter.Seq[zoneIP]) iter.Seq[zoneIP] {
+	if v6 {
+		return seq
 	}
 
-	close(outChan)
+	return func(yield func(zoneIP) bool) {
+		for zip := range seq {
+			if strings.Contains(zip.ip.name, ".") { // ipv4
+				if !yield(zip) {
+					return
+				}
+			}
+		}
+	}
 }
 
 func publicAxfr(db *sql.DB) {
 	fmt.Println("checking public AXFR")
 
-	zipChan := make(chan zoneIP, BUFLEN)
-	go zoneIPReader(db, zipChan, "AND zone.axfr_tried=FALSE")
+	zoneIPs := zoneIPReader(db, "AND zone.axfr_tried=FALSE")
+	zoneIPs = axfrWhitelist(zoneIPs)
+	zoneIPs = axfrV4Only(zoneIPs)
 
-	var whitelistedChan chan zoneIP
-	var ipVersionChan chan zoneIP
-
-	if len(AxfrWhitelistedZoneSet)+len(AxfrWhitelistedIPSet) > 0 {
-		whitelistedChan = make(chan zoneIP, MIDBUFLEN)
-		go axfrWhitelist(zipChan, whitelistedChan)
-	} else {
-		whitelistedChan = zipChan
-	}
-
-	if !v6 {
-		ipVersionChan = make(chan zoneIP, MIDBUFLEN)
-		go axfrV4Only(whitelistedChan, ipVersionChan)
-	} else {
-		ipVersionChan = whitelistedChan
-	}
-
-	zipFilteredChan := ipVersionChan
-
-	publicAxfrMaster(db, zipFilteredChan)
+	publicAxfrMaster(db, zoneIPs)
 }

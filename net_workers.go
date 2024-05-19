@@ -3,15 +3,16 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"iter"
 	"net"
 	"strings"
 	"sync"
 
-	"github.com/monoidic/dns"
+	"github.com/miekg/dns"
 )
 
 // `netWriter` wrapper for MX queries
-func mxWriter(db *sql.DB, zoneChan <-chan fieldData) {
+func mxWriter(db *sql.DB, seq iter.Seq[fieldData]) {
 	tablesFields := map[string]string{
 		"name":     "name",
 		"rr_type":  "name",
@@ -23,7 +24,7 @@ func mxWriter(db *sql.DB, zoneChan <-chan fieldData) {
 		"update":  "UPDATE name SET mx_resolved=TRUE, reg_checked=TRUE, registered=? WHERE id=?",
 	}
 
-	netWriter(db, zoneChan, tablesFields, namesStmts, mxResolverWorker, mxWrite)
+	netWriter(db, seq, tablesFields, namesStmts, mxResolverWorker, mxWrite)
 }
 
 // `insertF` for MX
@@ -44,13 +45,13 @@ func mxWrite(tableMap TableMap, stmtMap StmtMap, mxd mxData) {
 }
 
 // `netWriter` wrapper for checking for active nameservers
-func checkUpWriter(db *sql.DB, checkChan <-chan checkUpData) {
+func checkUpWriter(db *sql.DB, seq iter.Seq[checkUpData]) {
 	tablesFields := map[string]string{}
 	namesStmts := map[string]string{
 		"update": "UPDATE ip SET responsive=?, resp_checked=TRUE WHERE id=?",
 	}
 
-	netWriter(db, checkChan, tablesFields, namesStmts, checkUpWorker, checkUpWrite)
+	netWriter(db, seq, tablesFields, namesStmts, checkUpWorker, checkUpWrite)
 }
 
 // `insertF` for active nameservers
@@ -59,7 +60,7 @@ func checkUpWrite(_ TableMap, stmtMap StmtMap, cu checkUpData) {
 }
 
 // `netWriter` wrapper for PTR queries
-func rdnsWriter(db *sql.DB, ipChan <-chan fieldData) {
+func rdnsWriter(db *sql.DB, seq iter.Seq[fieldData]) {
 	tablesFields := map[string]string{
 		"name":     "name",
 		"rr_type":  "name",
@@ -71,7 +72,7 @@ func rdnsWriter(db *sql.DB, ipChan <-chan fieldData) {
 		"mapped":  "UPDATE ip SET rdns_mapped=TRUE WHERE id=?",
 	}
 
-	netWriter(db, ipChan, tablesFields, namesStmts, rdnsWorker, rdnsWrite)
+	netWriter(db, seq, tablesFields, namesStmts, rdnsWorker, rdnsWrite)
 }
 
 // `insertF` for PTR
@@ -93,7 +94,7 @@ func rdnsWrite(tableMap TableMap, stmtMap StmtMap, fdr rrResults[dns.PTR]) {
 }
 
 // `readerF` for SPF TXT queries
-func spfRRWriter(db *sql.DB, fdChan <-chan fieldData) {
+func spfRRWriter(db *sql.DB, seq iter.Seq[fieldData]) {
 	tablesFields := map[string]string{
 		"name":       "name",
 		"spf_record": "value",
@@ -106,7 +107,7 @@ func spfRRWriter(db *sql.DB, fdChan <-chan fieldData) {
 		"spf_duplicate": "UPDATE spf SET duplicate=TRUE WHERE name_id=? AND spf_record_id=?",
 	}
 
-	netWriter(db, fdChan, tablesFields, namesStmts, txtWorker, spfWrite)
+	netWriter(db, seq, tablesFields, namesStmts, txtWorker, spfWrite)
 }
 
 // `insertF` for SPF TXT
@@ -149,7 +150,7 @@ func spfWrite(tableMap TableMap, stmtMap StmtMap, fdr fdResults) {
 }
 
 // `netWriter` wrapper for DMARC TXT queries
-func dmarcRRWriter(db *sql.DB, fdChan <-chan fieldData) {
+func dmarcRRWriter(db *sql.DB, seq iter.Seq[fieldData]) {
 	tablesFields := map[string]string{
 		"name":         "name",
 		"dmarc_record": "value",
@@ -161,7 +162,7 @@ func dmarcRRWriter(db *sql.DB, fdChan <-chan fieldData) {
 		"dmarc_valid":     "UPDATE dmarc_record SET valid=?, error=? WHERE id=?",
 	}
 
-	netWriter(db, fdChan, tablesFields, namesStmts, txtWorker, dmarcWrite)
+	netWriter(db, seq, tablesFields, namesStmts, txtWorker, dmarcWrite)
 }
 
 // `insertF` for DMARC TXT
@@ -190,7 +191,7 @@ func dmarcWrite(tableMap TableMap, stmtMap StmtMap, fdr fdResults) {
 	stmtMap.exec("dmarc_tried", nameID)
 }
 
-func chaosTXTWriter(db *sql.DB, fdChan <-chan fieldData) {
+func chaosTXTWriter(db *sql.DB, seq iter.Seq[fieldData]) {
 	tablesFields := map[string]string{
 		"name":                 "name",
 		"chaos_response_value": "value",
@@ -201,7 +202,7 @@ func chaosTXTWriter(db *sql.DB, fdChan <-chan fieldData) {
 		"chaos_queried":  "UPDATE ip SET ch_resolved=TRUE WHERE id=?",
 	}
 
-	netWriter(db, fdChan, tablesFields, namesStmts, chaosTXTWorker, chaosTXTWrite)
+	netWriter(db, seq, tablesFields, namesStmts, chaosTXTWorker, chaosTXTWrite)
 }
 
 // `insertF` for Chaosnet TXT
@@ -221,14 +222,15 @@ func chaosTXTWrite(tableMap TableMap, stmtMap StmtMap, chr chaosResults) {
 }
 
 // `readerF` for checking for active nameservers
-func checkUpReader(db *sql.DB, checkChan chan<- checkUpData) {
-	// each NS IP and one zone it is meant to serve
-	tx := check1(db.Begin())
-	var v4Filter string
-	if !v6 {
-		v4Filter = `AND ip.address LIKE '%.%'`
-	}
-	rows := check1(tx.Query(fmt.Sprintf(`
+func checkUpReader(db *sql.DB) iter.Seq[checkUpData] {
+	return func(yield func(checkUpData) bool) {
+		// each NS IP and one zone it is meant to serve
+		tx := check1(db.Begin())
+		var v4Filter string
+		if !v6 {
+			v4Filter = `AND ip.address LIKE '%.%'`
+		}
+		rows := check1(tx.Query(fmt.Sprintf(`
 		SELECT DISTINCT ip.address, zone.name, ip.id
 		FROM zone_ns
 		INNER JOIN name AS zone ON zone_ns.zone_id = zone.id
@@ -238,25 +240,28 @@ func checkUpReader(db *sql.DB, checkChan chan<- checkUpData) {
 		GROUP BY ip.id
 	`, v4Filter)))
 
-	for rows.Next() {
-		var ip, zone string
-		var ipID int64
-		check(rows.Scan(&ip, &zone, &ipID))
-		checkChan <- checkUpData{
-			ns:   net.JoinHostPort(ip, "53"),
-			zone: zone,
-			ipID: ipID,
+		for rows.Next() {
+			var ip, zone string
+			var ipID int64
+			check(rows.Scan(&ip, &zone, &ipID))
+			if !yield(checkUpData{
+				ns:   net.JoinHostPort(ip, "53"),
+				zone: zone,
+				ipID: ipID,
+			}) {
+				break
+			}
 		}
-	}
 
-	check(rows.Close())
-	check(tx.Commit())
-	close(checkChan)
+		check(rows.Close())
+		check(tx.Commit())
+	}
 }
 
 // `readerF` for A/AAAA
-func zoneIPReader(db *sql.DB, zipChan chan<- zoneIP, extraFilter string) {
-	qs := fmt.Sprintf(`
+func zoneIPReader(db *sql.DB, extraFilter string) iter.Seq[zoneIP] {
+	return func(yield func(zoneIP) bool) {
+		qs := fmt.Sprintf(`
 		SELECT DISTINCT zone.name, ip.address, zone.id, ip.id
 		FROM zone_ns
 		INNER JOIN name_ip ON zone_ns.ns_id = name_ip.name_id
@@ -265,31 +270,34 @@ func zoneIPReader(db *sql.DB, zipChan chan<- zoneIP, extraFilter string) {
 		WHERE ip.responsive=TRUE %s
 	`, extraFilter)
 
-	tx := check1(db.Begin())
-	rows := check1(tx.Query(qs))
+		tx := check1(db.Begin())
+		rows := check1(tx.Query(qs))
 
-	for rows.Next() {
-		var zone, ip fieldData
-		check(rows.Scan(&zone.name, &ip.name, &zone.id, &ip.id))
-		ip.name = net.JoinHostPort(ip.name, "53")
-		zipChan <- zoneIP{zone: zone, ip: ip}
+		for rows.Next() {
+			var zone, ip fieldData
+			check(rows.Scan(&zone.name, &ip.name, &zone.id, &ip.id))
+			ip.name = net.JoinHostPort(ip.name, "53")
+			if !yield(zoneIP{zone: zone, ip: ip}) {
+				break
+			}
+		}
+
+		check(rows.Close())
+		check(tx.Commit())
 	}
-
-	check(rows.Close())
-	check(tx.Commit())
-	close(zipChan)
 }
 
 // helper function to add parent zone NS IPs for fetching glue records from parent zones
-func nsIPAdderWorker(db *sql.DB, zoneChan <-chan fieldData, withNSChan chan<- fdResults) {
-	tx := check1(db.Begin())
+func nsIPAdderWorker(db *sql.DB, seq iter.Seq[fieldData]) iter.Seq[fdResults] {
+	return func(yield func(fdResults) bool) {
+		tx := check1(db.Begin())
 
-	var v4Filter string
-	if !v6 {
-		v4Filter = `AND ip.address LIKE '%.%'`
-	}
+		var v4Filter string
+		if !v6 {
+			v4Filter = `AND ip.address LIKE '%.%'`
+		}
 
-	nsCache := getFDCache(fmt.Sprintf(`
+		nsCache := getFDCache(fmt.Sprintf(`
 		SELECT DISTINCT ip.address || ':53', ip.id
 		FROM name AS child
 		INNER JOIN zone_ns ON zone_ns.zone_id = child.parent_id
@@ -298,17 +306,19 @@ func nsIPAdderWorker(db *sql.DB, zoneChan <-chan fieldData, withNSChan chan<- fd
 		WHERE child.name=? %s
 	`, v4Filter), tx)
 
-	for zd := range zoneChan {
-		withNSChan <- fdResults{fieldData: zd, results: nsCache.getName(zd.name)}
-	}
+		for zd := range seq {
+			if !yield(fdResults{fieldData: zd, results: nsCache.getName(zd.name)}) {
+				break
+			}
+		}
 
-	close(withNSChan)
-	nsCache.clear()
-	check(tx.Commit())
+		nsCache.clear()
+		check(tx.Commit())
+	}
 }
 
 // `readerF` for fetching NS glue records from parent zones
-func parentNSWriter(db *sql.DB, zoneChan <-chan fieldData) {
+func parentNSWriter(db *sql.DB, seq iter.Seq[fieldData]) {
 	tablesFields := map[string]string{
 		"name": "name",
 		"ip":   "address",
@@ -321,10 +331,9 @@ func parentNSWriter(db *sql.DB, zoneChan <-chan fieldData) {
 		"fetched":        "UPDATE name SET glue_ns=TRUE WHERE id=?",
 	}
 
-	withNSChan := make(chan fdResults, MIDBUFLEN)
-	go nsIPAdderWorker(db, zoneChan, withNSChan)
+	nsIP := nsIPAdderWorker(db, seq)
 
-	netWriter(db, withNSChan, tablesFields, namesStmts, parentNSResolverWorker, parentNSWrite)
+	netWriter(db, nsIP, tablesFields, namesStmts, parentNSResolverWorker, parentNSWrite)
 }
 
 // `insertF` for NS glue records from parent zone
@@ -357,7 +366,7 @@ func parentNSWrite(tableMap TableMap, stmtMap StmtMap, nsr parentNSResults) {
 }
 
 // `netWriter` wrapper for NS queries
-func netNSWriter(db *sql.DB, zoneChan <-chan fieldData) {
+func netNSWriter(db *sql.DB, seq iter.Seq[fieldData]) {
 	tablesFields := map[string]string{
 		"name":     "name",
 		"rr_type":  "name",
@@ -371,7 +380,7 @@ func netNSWriter(db *sql.DB, zoneChan <-chan fieldData) {
 		"zone2rr":    "INSERT INTO zone2rr (zone_id, rr_type_id, rr_name_id, rr_value_id, inserted) VALUES (?, ?, ?, ?, TRUE) ON CONFLICT DO UPDATE SET inserted=TRUE",
 	}
 
-	netWriter(db, zoneChan, tablesFields, namesStmts, nsResolverWorker, nsWrite)
+	netWriter(db, seq, tablesFields, namesStmts, nsResolverWorker, nsWrite)
 }
 
 // `insertF` for NS
@@ -398,7 +407,7 @@ func nsWrite(tableMap TableMap, stmtMap StmtMap, nsd rrResults[dns.NS]) {
 }
 
 // `netWriter` wrapper for A/AAAA queries
-func netIPWriter(db *sql.DB, nameChan <-chan fieldData) {
+func netIPWriter(db *sql.DB, seq iter.Seq[fieldData]) {
 	tablesFields := map[string]string{
 		"ip":   "address",
 		"name": "name",
@@ -412,7 +421,7 @@ func netIPWriter(db *sql.DB, nameChan <-chan fieldData) {
 		"cname_entry": "UPDATE name SET reg_checked=TRUE, registered=?, cname_tgt_id=? WHERE id=?",
 	}
 
-	netWriter(db, nameChan, tablesFields, namesStmts, addrResolverWorker, ipWrite)
+	netWriter(db, seq, tablesFields, namesStmts, addrResolverWorker, ipWrite)
 }
 
 // `insertF` for A/AAAA
@@ -452,7 +461,7 @@ func ipWrite(tableMap TableMap, stmtMap StmtMap, ad addrData) {
 }
 
 // `resolverWorker` wrapper to check if a given host is responsive
-func checkUpWorker(inChan <-chan checkUpData, outChan chan<- checkUpData, wg *sync.WaitGroup) {
+func checkUpWorker(inChan <-chan retryWrap[checkUpData, empty], refeedChan chan<- retryWrap[checkUpData, empty], outChan chan<- checkUpData, wg, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode: dns.OpcodeQuery,
@@ -465,11 +474,11 @@ func checkUpWorker(inChan <-chan checkUpData, outChan chan<- checkUpData, wg *sy
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(inChan, outChan, msg, checkUpResolve, wg)
+	resolverWorker(inChan, refeedChan, outChan, msg, checkUpResolve, wg, retryWg)
 }
 
 // `resolverWorker` wrapper to perform PTR queries
-func rdnsWorker(inChan <-chan fieldData, outChan chan<- rrResults[dns.PTR], wg *sync.WaitGroup) {
+func rdnsWorker(inChan <-chan retryWrap[fieldData, empty], refeedChan chan<- retryWrap[fieldData, empty], outChan chan<- rrResults[dns.PTR], wg, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -483,11 +492,11 @@ func rdnsWorker(inChan <-chan fieldData, outChan chan<- rrResults[dns.PTR], wg *
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(inChan, outChan, msg, rdnsResolve, wg)
+	resolverWorker(inChan, refeedChan, outChan, msg, rdnsResolve, wg, retryWg)
 }
 
 // `resolverWorker` wrapper to perform TXT queries
-func txtWorker(inChan <-chan fieldData, outChan chan<- fdResults, wg *sync.WaitGroup) {
+func txtWorker(inChan <-chan retryWrap[fieldData, empty], refeedChan chan<- retryWrap[fieldData, empty], outChan chan<- fdResults, wg, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -501,11 +510,11 @@ func txtWorker(inChan <-chan fieldData, outChan chan<- fdResults, wg *sync.WaitG
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(inChan, outChan, msg, txtResolve, wg)
+	resolverWorker(inChan, refeedChan, outChan, msg, txtResolve, wg, retryWg)
 }
 
 // `resolverWorker` wrapper to perform Chaosnet TXT queries
-func chaosTXTWorker(inChan <-chan fieldData, outChan chan<- chaosResults, wg *sync.WaitGroup) {
+func chaosTXTWorker(inChan <-chan retryWrap[fieldData, chaosResults], refeedChan chan<- retryWrap[fieldData, chaosResults], outChan chan<- chaosResults, wg, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode: dns.OpcodeQuery,
@@ -518,11 +527,11 @@ func chaosTXTWorker(inChan <-chan fieldData, outChan chan<- chaosResults, wg *sy
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(inChan, outChan, msg, chaosTXTResolve, wg)
+	resolverWorker(inChan, refeedChan, outChan, msg, chaosTXTResolve, wg, retryWg)
 }
 
 // `resolverWorker` wrapper to perform NS queries on a parent zone for glue records
-func parentNSResolverWorker(inChan <-chan fdResults, outChan chan<- parentNSResults, wg *sync.WaitGroup) {
+func parentNSResolverWorker(inChan <-chan retryWrap[fdResults, parentNSResults], refeedChan chan<- retryWrap[fdResults, parentNSResults], outChan chan<- parentNSResults, wg, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode: dns.OpcodeQuery,
@@ -535,11 +544,11 @@ func parentNSResolverWorker(inChan <-chan fdResults, outChan chan<- parentNSResu
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(inChan, outChan, msg, parentNsResolve, wg)
+	resolverWorker(inChan, refeedChan, outChan, msg, parentNsResolve, wg, retryWg)
 }
 
 // `resolverWorker` wrapper to query for arbitrary name:rrtype pairs received from NSEC walking results
-func nsecWalkResultResolver(inChan <-chan rrDBData, outChan chan<- nsecWalkResolveRes, wg *sync.WaitGroup) {
+func nsecWalkResultResolver(inChan <-chan retryWrap[rrDBData, empty], refeedChan chan<- retryWrap[rrDBData, empty], outChan chan<- nsecWalkResolveRes, wg, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -552,28 +561,24 @@ func nsecWalkResultResolver(inChan <-chan rrDBData, outChan chan<- nsecWalkResol
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(inChan, outChan, msg, nsecWalkResultResolve, wg)
+	resolverWorker(inChan, refeedChan, outChan, msg, nsecWalkResultResolve, wg, retryWg)
 }
 
 // `processsData` function
-func nsecWalkResultResolve(connCache connCache, msg dns.Msg, rrD rrDBData) (res nsecWalkResolveRes) {
-	msg.Question[0].Name = rrD.rrName.name
-	msg.Question[0].Qtype = dns.StringToType[rrD.rrType.name]
+func nsecWalkResultResolve(connCache connCache, msg dns.Msg, rrD *retryWrap[rrDBData, empty]) (res nsecWalkResolveRes, err error) {
+	msg.Question[0].Name = rrD.val.rrName.name
+	msg.Question[0].Qtype = dns.StringToType[rrD.val.rrType.name]
+	res.rrDBData = rrD.val
 
 	var response *dns.Msg
-	var err error
 
-	for i := 0; i < RETRIES; i++ {
-		nameserver := randomNS()
-		if response, err = plainResolve(msg, connCache, nameserver); err == nil {
-			break
-		}
+	response, err = plainResolveRandom(msg, connCache)
+	if err != nil {
+		return
 	}
 
-	res.rrDBData = rrD
-
 	if response == nil {
-		return res
+		return
 	}
 
 	res.results = make([]rrData, len(response.Answer))
@@ -589,48 +594,42 @@ func nsecWalkResultResolve(connCache connCache, msg dns.Msg, rrD rrDBData) (res 
 		res.results[i] = resRRD
 	}
 
-	return res
+	return
 }
 
 // `processsData` function
-func nsResolve(connCache connCache, msg dns.Msg, fd fieldData) rrResults[dns.NS] {
-	msg.Question[0].Name = dns.Fqdn(fd.name)
+func nsResolve(connCache connCache, msg dns.Msg, fd *retryWrap[fieldData, empty]) (rrR rrResults[dns.NS], err error) {
+	msg.Question[0].Name = dns.Fqdn(fd.val.name)
 	var response *dns.Msg
-	var results []dns.NS
-	var err error
+	rrR.fieldData = fd.val
 
-	for i := 0; i < RETRIES; i++ {
-		nameserver := randomNS()
-		if response, err = plainResolve(msg, connCache, nameserver); err == nil {
-			break
-		}
+	response, err = plainResolveRandom(msg, connCache)
+	if err != nil {
+		return
 	}
 
 	if response != nil {
 		for _, rr := range response.Answer {
 			switch rrT := rr.(type) {
 			case *dns.NS:
-				results = append(results, *rrT)
+				rrR.results = append(rrR.results, *rrT)
 			}
 		}
 	}
 
-	return rrResults[dns.NS]{fieldData: fd, results: results}
+	return
 }
 
 // `processsData` function
-func mxResolve(connCache connCache, msg dns.Msg, fd fieldData) mxData {
-	msg.Question[0].Name = dns.Fqdn(fd.name)
+func mxResolve(connCache connCache, msg dns.Msg, fd *retryWrap[fieldData, empty]) (mxd mxData, err error) {
+	msg.Question[0].Name = dns.Fqdn(fd.val.name)
 	var response *dns.Msg
 	var results []dns.MX
-	var err error
 	registered := true
 
-	for i := 0; i < RETRIES; i++ {
-		nameserver := randomNS()
-		if response, err = plainResolve(msg, connCache, nameserver); err == nil {
-			break
-		}
+	response, err = plainResolveRandom(msg, connCache)
+	if err != nil {
+		return
 	}
 
 	if response != nil {
@@ -644,72 +643,68 @@ func mxResolve(connCache connCache, msg dns.Msg, fd fieldData) mxData {
 		registered = response.Rcode != dns.RcodeNameError
 	}
 
-	return mxData{rrResults: rrResults[dns.MX]{results: results, fieldData: fd}, registered: registered}
+	mxd = mxData{rrResults: rrResults[dns.MX]{results: results, fieldData: fd.val}, registered: registered}
+	return
 }
 
 // `processsData` function
-func addrResolve(connCache connCache, msg dns.Msg, fd fieldData) addrData {
-	msg.Question[0].Name = dns.Fqdn(fd.name)
+func addrResolve(connCache connCache, msg dns.Msg, fd *retryWrap[fieldData, addrData]) (ad addrData, err error) {
+	msg.Question[0].Name = dns.Fqdn(fd.val.name)
 
-	var cname []dns.CNAME
-	var a []dns.A
-	var aaaa []dns.AAAA
-	var err error
-	registered := true
+	qTypes := []uint16{dns.TypeA, dns.TypeAAAA}
 
-	for _, qtype := range []uint16{dns.TypeA, dns.TypeAAAA} {
+	for i := fd.stage; i < len(qTypes); i++ {
+		fd.stage = i
+		qtype := qTypes[i]
 		msg.Question[0].Qtype = qtype
 		var response *dns.Msg
 
-		for i := 0; i < RETRIES; i++ {
-			nameserver := randomNS()
-			if response, err = plainResolve(msg, connCache, nameserver); err == nil {
-				break
+		response, err = plainResolveRandom(msg, connCache)
+		if err != nil {
+			if fd.retriesLeft == 0 {
+				// try next qtype
+				fd.retriesLeft = RETRIES
+				err = nil
+				continue
+			}
+			return
+		}
+
+		for _, rr := range response.Answer {
+			switch rrT := rr.(type) {
+			case *dns.A:
+				normalizeRR(rrT)
+				fd.tmp.a = append(fd.tmp.a, *rrT)
+			case *dns.AAAA:
+				normalizeRR(rrT)
+				fd.tmp.aaaa = append(fd.tmp.aaaa, *rrT)
+			case *dns.CNAME:
+				normalizeRR(rrT)
+				fd.tmp.cname = append(fd.tmp.cname, *rrT)
 			}
 		}
 
-		if response != nil {
-			for _, rr := range response.Answer {
-				switch rrT := rr.(type) {
-				case *dns.A:
-					normalizeRR(rrT)
-					a = append(a, *rrT)
-				case *dns.AAAA:
-					normalizeRR(rrT)
-					aaaa = append(aaaa, *rrT)
-				case *dns.CNAME:
-					normalizeRR(rrT)
-					cname = append(cname, *rrT)
-				}
-			}
-
-			registered = response.Rcode != dns.RcodeNameError
-		}
+		fd.tmp.registered = response.Rcode != dns.RcodeNameError
 	}
+	ad = fd.tmp
+	ad.fieldData = fd.val
 
-	return addrData{fieldData: fd, a: a, aaaa: aaaa, cname: cname, registered: registered}
+	return
 }
 
 // `processsData` function
-func parentCheckResolve(connCache connCache, msg dns.Msg, cp childParent) childParent {
+func parentCheckResolve(connCache connCache, msg dns.Msg, cpIn *retryWrap[childParent, empty]) (cp childParent, err error) {
+	cp = cpIn.val
 	if cp.resolved { // ID fetched by parentCheckFilter or invalid/nonexistant
-		return cp
+		return
 	}
 
 	msg.Question[0].Name = cp.parentGuess
 	var res *dns.Msg
-	var err error
 
-	for i := 0; i < RETRIES; i++ {
-		nameserver := randomNS()
-		res, err = plainResolve(msg, connCache, nameserver)
-		if err == nil {
-			break
-		}
-	}
-
+	res, err = plainResolveRandom(msg, connCache)
 	if err != nil {
-		return cp
+		return
 	}
 
 	var soa *dns.SOA
@@ -733,44 +728,38 @@ parentCheckSOALoop:
 		cp.registered = res.Rcode != dns.RcodeNameError
 	}
 
-	return cp
+	return
 }
 
 // `processsData` function
-func checkUpResolve(connCache connCache, msg dns.Msg, cu checkUpData) checkUpData {
+func checkUpResolve(connCache connCache, msg dns.Msg, cuIn *retryWrap[checkUpData, empty]) (cu checkUpData, err error) {
+	cu = cuIn.val
 	msg.Question[0].Name = dns.Fqdn(cu.zone)
 	cu.registered = true
 
-	for i := 0; i < RETRIES; i++ {
-		if res, err := plainResolve(msg, connCache, cu.ns); err == nil {
-			cu.registered = res.Rcode != dns.RcodeNameError
-			cu.success = true
-			break
-		}
+	res, err := plainResolve(msg, connCache, cu.ns)
+	if err == nil {
+		cu.registered = res.Rcode != dns.RcodeNameError
+		cu.success = true
 	}
 
-	return cu
+	return
 }
 
 // `processsData` function
-func rdnsResolve(connCache connCache, msg dns.Msg, fd fieldData) rrResults[dns.PTR] {
-	//msg.Question[0].Name = check1(dns.ReverseAddr(fd.name))
-	if addr, err := dns.ReverseAddr(fd.name); err == nil {
+func rdnsResolve(connCache connCache, msg dns.Msg, fd *retryWrap[fieldData, empty]) (rrR rrResults[dns.PTR], err error) {
+	if addr, err := dns.ReverseAddr(fd.val.name); err == nil {
 		msg.Question[0].Name = addr
 	} else {
-		fmt.Printf("fd.name = %q\n", fd.name)
+		fmt.Printf("fd.val.name = %q\n", fd.val.name)
 		panic(err)
 	}
 	var res *dns.Msg
 	var results []dns.PTR
 
-	for i := 0; i < RETRIES; i++ {
-		var err error
-		nameserver := randomNS()
-		res, err = plainResolve(msg, connCache, nameserver)
-		if err == nil {
-			break
-		}
+	res, err = plainResolveRandom(msg, connCache)
+	if err != nil {
+		return
 	}
 
 	if res != nil {
@@ -783,22 +772,19 @@ func rdnsResolve(connCache connCache, msg dns.Msg, fd fieldData) rrResults[dns.P
 		}
 	}
 
-	return rrResults[dns.PTR]{fieldData: fd, results: results}
+	rrR = rrResults[dns.PTR]{fieldData: fd.val, results: results}
+	return
 }
 
 // `processsData` function
-func txtResolve(connCache connCache, msg dns.Msg, fd fieldData) fdResults {
-	msg.Question[0].Name = dns.Fqdn(fd.name)
+func txtResolve(connCache connCache, msg dns.Msg, fd *retryWrap[fieldData, empty]) (fdR fdResults, err error) {
+	msg.Question[0].Name = dns.Fqdn(fd.val.name)
 	var results []string
 	var res *dns.Msg
 
-	for i := 0; i < RETRIES; i++ {
-		var err error
-		nameserver := randomNS()
-		res, err = plainResolve(msg, connCache, nameserver)
-		if err == nil {
-			break
-		}
+	res, err = plainResolveRandom(msg, connCache)
+	if err != nil {
+		return
 	}
 
 	if res != nil {
@@ -809,68 +795,75 @@ func txtResolve(connCache connCache, msg dns.Msg, fd fieldData) fdResults {
 			}
 		}
 	}
-	return fdResults{fieldData: fd, results: results}
+
+	fdR = fdResults{fieldData: fd.val, results: results}
+	return
 }
 
-func chaosTXTResolve(connCache connCache, msg dns.Msg, fd fieldData) chaosResults {
-	nameserver := net.JoinHostPort(fd.name, "53")
-	var results []chaosResult
+func chaosTXTResolve(connCache connCache, msg dns.Msg, fd *retryWrap[fieldData, chaosResults]) (cr chaosResults, err error) {
+	nameserver := net.JoinHostPort(fd.val.name, "53")
 
-	for _, name := range chaosTXTNames {
+	for i := fd.stage; i < len(chaosTXTNames); i++ {
+		fd.stage = i
+		name := chaosTXTNames[i]
 		msg.Question[0].Name = name
 		var res *dns.Msg
 
-		for i := 0; i < RETRIES; i++ {
-			var err error
-			res, err = plainResolve(msg, connCache, nameserver)
-			if err == nil {
-				break
+		res, err = plainResolve(msg, connCache, nameserver)
+		if err != nil {
+			if fd.retriesLeft == 0 {
+				// skip to next entry
+				fd.retriesLeft = RETRIES
+				err = nil
+				continue
 			}
+			return
 		}
 
-		if res != nil {
-			for _, rr := range res.Answer {
-				switch rrT := rr.(type) {
-				case *dns.TXT:
-					results = append(results, chaosResult{
-						queried:    name,
-						resultName: strings.ToLower(rrT.Hdr.Name),
-						value:      strings.Join(rrT.Txt, ""),
-					})
-				}
+		for _, rr := range res.Answer {
+			switch rrT := rr.(type) {
+			case *dns.TXT:
+				fd.tmp.results = append(fd.tmp.results, chaosResult{
+					queried:    name,
+					resultName: strings.ToLower(rrT.Hdr.Name),
+					value:      strings.Join(rrT.Txt, ""),
+				})
 			}
 		}
 	}
 
-	return chaosResults{fieldData: fd, results: results}
+	cr = fd.tmp
+	cr.fieldData = fd.val
+
+	return
 }
 
 // `processsData` function
-func parentNsResolve(connCache connCache, msg dns.Msg, fdr fdResults) parentNSResults {
-	msg.Question[0].Name = dns.Fqdn(fdr.name)
-	var nsResults []dns.NS
-	var aResults []dns.A
-	var aaaaResults []dns.AAAA
+func parentNsResolve(connCache connCache, msg dns.Msg, fdr *retryWrap[fdResults, parentNSResults]) (pr parentNSResults, err error) {
+	msg.Question[0].Name = dns.Fqdn(fdr.val.name)
 
-	if nsLen := len(fdr.results); nsLen > 0 {
-		var response *dns.Msg
-		var err error
-	parentNsResolveOuterLoop:
-		for _, nameserver := range fdr.results {
-			for i := 0; i < RETRIES; i++ {
-				response, err = plainResolve(msg, connCache, nameserver)
-				if err == nil {
-					break parentNsResolveOuterLoop
+	if nsLen := len(fdr.val.results); nsLen > 0 {
+		for i := fdr.stage; i < len(fdr.val.results); i++ {
+			fdr.stage = i
+			nameserver := fdr.val.results[i]
+			var response *dns.Msg
+
+			response, err = plainResolve(msg, connCache, nameserver)
+			if err != nil {
+				if fdr.retriesLeft == 0 {
+					// skip to next
+					fdr.retriesLeft = RETRIES
+					err = nil
+					continue
 				}
+				return
 			}
-		}
 
-		if response != nil {
 			for _, rr := range response.Ns {
 				switch rrT := rr.(type) {
 				case *dns.NS:
 					normalizeRR(rrT)
-					nsResults = append(nsResults, *rrT)
+					fdr.tmp.ns = append(fdr.tmp.ns, *rrT)
 				}
 			}
 
@@ -878,20 +871,23 @@ func parentNsResolve(connCache connCache, msg dns.Msg, fdr fdResults) parentNSRe
 				switch rrT := rr.(type) {
 				case *dns.A:
 					normalizeRR(rrT)
-					aResults = append(aResults, *rrT)
+					fdr.tmp.a = append(fdr.tmp.a, *rrT)
 				case *dns.AAAA:
 					normalizeRR(rrT)
-					aaaaResults = append(aaaaResults, *rrT)
+					fdr.tmp.aaaa = append(fdr.tmp.aaaa, *rrT)
 				}
 			}
 		}
 	}
 
-	return parentNSResults{fieldData: fdr.fieldData, ns: nsResults, a: aResults, aaaa: aaaaResults}
+	pr = fdr.tmp
+	pr.fieldData = fdr.val.fieldData
+
+	return
 }
 
 // `resolverWorker` wrapper to perform NS queries
-func nsResolverWorker(inChan <-chan fieldData, outChan chan<- rrResults[dns.NS], wg *sync.WaitGroup) {
+func nsResolverWorker(dataChan <-chan retryWrap[fieldData, empty], refeedChan chan<- retryWrap[fieldData, empty], outChan chan<- rrResults[dns.NS], wg, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -905,11 +901,11 @@ func nsResolverWorker(inChan <-chan fieldData, outChan chan<- rrResults[dns.NS],
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(inChan, outChan, msg, nsResolve, wg)
+	resolverWorker(dataChan, refeedChan, outChan, msg, nsResolve, wg, retryWg)
 }
 
 // `resolverWorker` wrapper to perform MX queries
-func mxResolverWorker(inChan <-chan fieldData, outChan chan<- mxData, wg *sync.WaitGroup) {
+func mxResolverWorker(dataChan <-chan retryWrap[fieldData, empty], refeedChan chan<- retryWrap[fieldData, empty], outChan chan<- mxData, wg, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -923,11 +919,11 @@ func mxResolverWorker(inChan <-chan fieldData, outChan chan<- mxData, wg *sync.W
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(inChan, outChan, msg, mxResolve, wg)
+	resolverWorker(dataChan, refeedChan, outChan, msg, mxResolve, wg, retryWg)
 }
 
 // `resolverWorker` wrapper to perform A/AAAA queries
-func addrResolverWorker(inChan <-chan fieldData, outChan chan<- addrData, wg *sync.WaitGroup) {
+func addrResolverWorker(dataChan <-chan retryWrap[fieldData, addrData], refeedChan chan<- retryWrap[fieldData, addrData], outChan chan<- addrData, wg, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -940,11 +936,11 @@ func addrResolverWorker(inChan <-chan fieldData, outChan chan<- addrData, wg *sy
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(inChan, outChan, msg, addrResolve, wg)
+	resolverWorker(dataChan, refeedChan, outChan, msg, addrResolve, wg, retryWg)
 }
 
 // `resolverWorker` wrapper to query for zone parents
-func parentCheckWorker(inChan <-chan childParent, outChan chan<- childParent, wg *sync.WaitGroup, tableMap TableMap, _ StmtMap) {
+func parentCheckWorker(dataChan <-chan retryWrap[childParent, empty], refeedChan chan<- retryWrap[childParent, empty], outChan chan<- childParent, wg, retryWg *sync.WaitGroup, tableMap TableMap, _ StmtMap) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -958,8 +954,8 @@ func parentCheckWorker(inChan <-chan childParent, outChan chan<- childParent, wg
 	}
 	msgSetSize(&msg)
 
-	workerInChan := make(chan childParent, MIDBUFLEN)
-	go parentCheckFilter(inChan, workerInChan, tableMap)
+	workerInChan := make(chan retryWrap[childParent, empty], MIDBUFLEN)
+	go parentCheckFilter(dataChan, workerInChan, tableMap)
 
-	resolverWorker(workerInChan, outChan, msg, parentCheckResolve, wg)
+	resolverWorker(workerInChan, refeedChan, outChan, msg, parentCheckResolve, wg, retryWg)
 }

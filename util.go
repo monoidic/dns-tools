@@ -2,13 +2,16 @@ package main
 
 import (
 	"fmt"
+	"iter"
 	"math"
 	"math/rand"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 
-	"github.com/monoidic/dns"
+	"github.com/miekg/dns"
+	"github.com/monoidic/rangeset"
 )
 
 func normalizeRR(rr dns.RR) {
@@ -83,11 +86,13 @@ func normalizeRR(rr dns.RR) {
 }
 
 func closeChanWait[T any](wg *sync.WaitGroup, ch chan T) {
-	wg.Wait()
-	close(ch)
+	go func() {
+		wg.Wait()
+		close(ch)
+	}()
 }
 
-type Set[T comparable] map[T]struct{}
+type Set[T comparable] map[T]empty
 
 func (s Set[T]) Contains(key T) bool {
 	_, ret := s[key]
@@ -95,7 +100,7 @@ func (s Set[T]) Contains(key T) bool {
 }
 
 func (s Set[T]) Add(key T) {
-	s[key] = struct{}{}
+	s[key] = empty{}
 }
 
 func (s Set[T]) Delete(key T) {
@@ -107,23 +112,32 @@ func (s Set[T]) String() string {
 	check1(b.WriteString(reflect.TypeOf(s).Name())) // e.g "Set[string]"
 	check(b.WriteByte('{'))
 
-	first := true
+	var addComma bool
+
 	for e := range s {
-		if !first {
-			check1(b.WriteString(", "))
+		if addComma {
+			b.WriteByte(',')
 		} else {
-			first = false
+			addComma = true
 		}
 		check1(b.WriteString(fmt.Sprintf("\"%#v\"", e)))
 	}
 
-	check(b.WriteByte('}'))
+	b.WriteByte('}')
 
 	return b.String()
 }
 
 func makeSet[T comparable](l []T) Set[T] {
 	ret := make(Set[T])
+	for _, k := range l {
+		ret.Add(k)
+	}
+	return ret
+}
+
+func makeExactSet[T comparable](l []T) Set[T] {
+	ret := make(Set[T], len(l))
 	for _, k := range l {
 		ret.Add(k)
 	}
@@ -144,7 +158,7 @@ func cnameChainFinalEntry(arr []dns.CNAME) (string, bool) {
 
 	finalFrom := arr[len(arr)-1].Hdr.Name
 	cnameLoop := true
-	for i := 0; i < len(arr); i++ {
+	for range len(arr) {
 		target, ok := m[finalFrom]
 		if !ok {
 			cnameLoop = false
@@ -158,53 +172,13 @@ func cnameChainFinalEntry(arr []dns.CNAME) (string, bool) {
 // reverse an ASCII string
 func reverseASCII(s string) string {
 	b := []byte(s)
-	reverseList(b)
+	slices.Reverse(b)
 	return string(b)
 }
 
-// reverse a list
-func reverseList[T any](l []T) {
-	lLen := len(l)
-	for i := 0; i < lLen/2; i++ {
-		i2 := lLen - i - 1
-		l[i], l[i2] = l[i2], l[i]
-	}
-}
-
 type splitRange struct {
-	prevKnown  [2]string
-	afterKnown [2]string
-}
-
-// split the search space for nsec
-func splitAscii(zone string, n, length int) []splitRange {
-	if n == 1 {
-		return []splitRange{{}}
-	}
-
-	steps := make([]string, n-1)
-
-	for i := 0; i < n-1; i++ {
-		steps[i] = fmt.Sprintf("%s.%s", fractString(float64(i+1)/float64(n), length), zone)
-	}
-
-	ret := make([]splitRange, n)
-
-	ret[0] = splitRange{
-		afterKnown: [2]string{steps[0], zone},
-	}
-	ret[n-1] = splitRange{
-		prevKnown: [2]string{zone, steps[n-2]},
-	}
-
-	for i := 1; i < n-1; i++ {
-		ret[i] = splitRange{
-			prevKnown:  [2]string{zone, steps[i-1]},
-			afterKnown: [2]string{steps[i], zone},
-		}
-	}
-
-	return ret
+	prevKnown  rangeset.RangeEntry[string]
+	afterKnown rangeset.RangeEntry[string]
 }
 
 const fractChars = "0123456789-abcdefghijklmnopqrstuvwxyz"
@@ -225,13 +199,16 @@ func fractString(fract float64, length int) string {
 	fractLen := len(fractChars)
 	fractLenF := float64(fractLen)
 
-	for i := 0; i < length; i++ {
+	for i := range length {
 		idx := int(fract * fractLenF)
 		if idx == fractLen {
 			idx = fractLen - 1
 		}
 		buf[i] = fractChars[idx]
 		fract = (fract - float64(idx)/fractLenF) * fractLenF
+		if fract < 0 {
+			fract = 0
+		}
 	}
 
 	return string(buf)
@@ -244,4 +221,124 @@ func stringFract(s string) float64 {
 		ret += fractIndexes[c] / math.Pow(float64(len(fractChars)), float64(i+1))
 	}
 	return ret
+}
+
+func splitAscii(start, end float64, n, length int) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		diff := (end - start) / float64(n)
+		for i := 1; i < n; i++ {
+			s := fractString(start+(diff*float64(i)), length)
+			if !yield(s) {
+				break
+			}
+		}
+	}
+}
+
+type retryWrap[inType, tmpType any] struct {
+	// wrapped value
+	val inType
+	// in case state should be held inbetween stages
+	tmp tmpType
+	// decrement and reinsert if greater than zero,
+	// otherwise use last returned value
+	retriesLeft int
+	// stage of the task
+	stage int
+}
+
+type empty struct{}
+
+func collect[T any](seq iter.Seq[T]) []T {
+	var ret []T
+	for e := range seq {
+		ret = append(ret, e)
+	}
+	return ret
+}
+
+func chanToSeq[T any](ch <-chan T) iter.Seq[T] {
+	return func(yield func(T) bool) {
+		for e := range ch {
+			// always exhaust chan
+			_ = yield(e)
+		}
+	}
+}
+
+func seqToChan[T any](seq iter.Seq[T], bufsize int) <-chan T {
+	ch := make(chan T, bufsize)
+	go func() {
+		for e := range seq {
+			ch <- e
+		}
+		close(ch)
+	}()
+	return ch
+}
+
+func bufferedSeq[T any](seq iter.Seq[T], bufsize int) iter.Seq[T] {
+	ch := make(chan T, bufsize)
+	var done bool
+
+	go func() {
+		for e := range seq {
+			if done {
+				break
+			}
+			ch <- e
+		}
+		close(ch)
+	}()
+
+	return func(yield func(T) bool) {
+		for e := range ch {
+			if !yield(e) {
+				break
+			}
+		}
+		done = true
+	}
+}
+
+func priorityChanGen[T any]() (inLow, inHigh, out chan T, stop func()) {
+	inLow = make(chan T, MIDBUFLEN)
+	inHigh = make(chan T, MIDBUFLEN)
+	out = make(chan T, MIDBUFLEN)
+
+	doneCh := make(chan empty)
+
+	stop = func() {
+		doneCh <- empty{}
+	}
+
+	go func() {
+		for {
+			var val T
+			select {
+			case <-doneCh:
+				close(out)
+				close(inHigh)
+				close(inLow)
+				return
+			default:
+				select {
+				case val = <-inHigh:
+				default:
+					select {
+					case val = <-inHigh:
+					case val = <-inLow:
+					case <-doneCh:
+						close(out)
+						close(inHigh)
+						close(inLow)
+						return
+					}
+				}
+			}
+			out <- val
+		}
+	}()
+
+	return inLow, inHigh, out, stop
 }

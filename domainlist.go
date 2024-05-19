@@ -4,15 +4,17 @@ import (
 	"bufio"
 	"database/sql"
 	"io/fs"
+	"iter"
 	"os"
 	"strings"
 	"sync"
 
-	"github.com/monoidic/dns"
+	"github.com/miekg/dns"
 )
 
 // parse domain list files
 func readDomainLists(fileChan <-chan string, domainChan chan<- string, wg *sync.WaitGroup) {
+	defer wg.Done()
 	for filename := range fileChan {
 		fp := check1(os.Open(filename))
 
@@ -25,10 +27,9 @@ func readDomainLists(fileChan <-chan string, domainChan chan<- string, wg *sync.
 
 		check(fp.Close())
 	}
-	wg.Done()
 }
 
-func insertDomainWorker(db *sql.DB, domainChan <-chan string) {
+func insertDomainWorker(db *sql.DB, seq iter.Seq[string]) {
 	tablesFields := map[string]string{
 		"name": "name",
 	}
@@ -36,7 +37,7 @@ func insertDomainWorker(db *sql.DB, domainChan <-chan string) {
 		"maybe_zone": "UPDATE name SET maybe_zone=TRUE WHERE id=? AND maybe_checked=FALSE AND is_zone=FALSE AND registered=TRUE AND valid=TRUE",
 	}
 
-	insertRR(db, domainChan, tablesFields, namesStmts, domainInsert)
+	insertRR(db, seq, tablesFields, namesStmts, domainInsert)
 }
 
 func domainInsert(tableMap TableMap, stmtMap StmtMap, domain string) {
@@ -66,11 +67,11 @@ func parseDomainLists(db *sql.DB) {
 	var wg sync.WaitGroup
 	wg.Add(numProcs)
 
-	for i := 0; i < numProcs; i++ {
+	for range numProcs {
 		go readDomainLists(fileChan, domainChan, &wg)
 	}
 
-	go closeChanWait(&wg, domainChan)
+	closeChanWait(&wg, domainChan)
 
-	insertDomainWorker(db, domainChan)
+	insertDomainWorker(db, chanToSeq(domainChan))
 }

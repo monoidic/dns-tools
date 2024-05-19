@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/monoidic/dns"
+	"github.com/miekg/dns"
 )
 
 type spfMechanism uint8
@@ -379,11 +379,8 @@ func getPatternNameMap(pattern *regexp.Regexp) map[string]int {
 }
 
 func parseCidrNum(b []byte) (uint8, error) {
-	if unum, err := strconv.ParseUint(string(b[1:]), 10, 8); err == nil {
-		return uint8(unum), nil
-	} else {
-		return 0, err
-	}
+	unum, err := strconv.ParseUint(string(b[1:]), 10, 8)
+	return uint8(unum), err
 }
 
 func compileExactMatch(pattern string) *regexp.Regexp {

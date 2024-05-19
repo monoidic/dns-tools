@@ -3,9 +3,10 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"iter"
 	"sync"
 
-	"github.com/monoidic/dns"
+	"github.com/miekg/dns"
 )
 
 type regStatus struct {
@@ -14,7 +15,7 @@ type regStatus struct {
 	registered bool
 }
 
-func regMapper(zoneChan <-chan fieldData, outChan chan<- regStatus, wg *sync.WaitGroup) {
+func regMapper(zoneChan <-chan retryWrap[fieldData, empty], refeedChan chan<- retryWrap[fieldData, empty], outChan chan<- regStatus, wg, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -28,46 +29,45 @@ func regMapper(zoneChan <-chan fieldData, outChan chan<- regStatus, wg *sync.Wai
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(zoneChan, outChan, msg, regMap, wg)
+	resolverWorker(zoneChan, refeedChan, outChan, msg, regMap, wg, retryWg)
 }
 
-func regMap(connCache connCache, msg dns.Msg, zd fieldData) regStatus {
-	zone := zd.name
+var regMapErr = Error{s: "regmaperr"}
+
+func regMap(connCache connCache, msg dns.Msg, zd *retryWrap[fieldData, empty]) (rs regStatus, err error) {
+	zone := zd.val.name
 	msg.Question[0].Name = zone
 	registered := true
 
-loop:
-	for i := 0; i < RETRIES; i++ {
-		nameserver := randomNS()
-		res, err := plainResolve(msg, connCache, nameserver)
-		if err != nil {
-			// fmt.Printf("regMapper: %s\n", err)
-			continue
-		}
-
-		switch res.Rcode {
-		case dns.RcodeSuccess:
-			registered = true
-			break loop
-		case dns.RcodeNameError: // nxdomain
-			registered = false
-			break loop
-		case dns.RcodeServerFailure: // ignore
-		default:
-			fmt.Printf("regMapper 2: rcode %d\n", res.Rcode)
-		}
+	res, err := plainResolveRandom(msg, connCache)
+	if err != nil {
+		// fmt.Printf("regMapper: %s\n", err)
+		return
 	}
 
-	return regStatus{zone: zone, id: zd.id, registered: registered}
+	switch res.Rcode {
+	case dns.RcodeSuccess:
+		registered = true
+	case dns.RcodeNameError: // nxdomain
+		registered = false
+	case dns.RcodeServerFailure: // ignore
+	default:
+		fmt.Printf("regMapper 2: rcode %d\n", res.Rcode)
+		err = regMapErr
+		return
+	}
+
+	rs = regStatus{zone: zone, id: zd.val.id, registered: registered}
+	return
 }
 
-func detectUnregisteredDomains(db *sql.DB, zoneChan <-chan fieldData) {
+func detectUnregisteredDomains(db *sql.DB, seq iter.Seq[fieldData]) {
 	tablesFields := map[string]string{}
 	namesStmts := map[string]string{
 		"update": "UPDATE name SET reg_checked=TRUE, registered=? WHERE id=?",
 	}
 
-	netWriter(db, zoneChan, tablesFields, namesStmts, regMapper, unregisteredWrite)
+	netWriter(db, seq, tablesFields, namesStmts, regMapper, unregisteredWrite)
 }
 
 func unregisteredWrite(_ TableMap, stmtMap StmtMap, reg regStatus) {
@@ -75,5 +75,11 @@ func unregisteredWrite(_ TableMap, stmtMap StmtMap, reg regStatus) {
 }
 
 func getUnregisteredDomains(db *sql.DB) {
-	readerWriter("finding unregistered domains", db, getRegUncheckedZones, detectUnregisteredDomains)
+	readerWriter("finding unregistered domains", db, getDbFieldData(`
+	SELECT name, id
+	FROM name
+	WHERE reg_checked=FALSE
+	AND is_zone=TRUE
+	AND valid=TRUE
+`, db), detectUnregisteredDomains)
 }

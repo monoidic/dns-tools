@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"iter"
 	"sync"
 	"time"
 
@@ -584,7 +585,7 @@ func createROGetF(tx *sql.Tx, tableName string, valueName string) (ttlcache.Opti
 	return cacheF, cleanupF
 }
 
-func insertRR[rrType any](db *sql.DB, rrChan <-chan rrType, tablesFields, namesStmts map[string]string, rrF rrF[rrType]) {
+func insertRR[rrType any](db *sql.DB, seq iter.Seq[rrType], tablesFields, namesStmts map[string]string, rrF rrF[rrType]) {
 	tx := check1(db.Begin())
 
 	tableMap := getTableMap(tablesFields, tx)
@@ -592,7 +593,7 @@ func insertRR[rrType any](db *sql.DB, rrChan <-chan rrType, tablesFields, namesS
 
 	i := CHUNKSIZE
 
-	for rrD := range rrChan {
+	for rrD := range bufferedSeq(seq, MIDBUFLEN) {
 		if i == 0 {
 			i = CHUNKSIZE
 
@@ -618,9 +619,10 @@ func insertRR[rrType any](db *sql.DB, rrChan <-chan rrType, tablesFields, namesS
 	check(tx.Commit())
 }
 
-func getZone2RR(filter string, db *sql.DB, dataChan chan<- rrDBData) {
-	tx := check1(db.Begin())
-	rows := check1(tx.Query(fmt.Sprintf(`
+func getZone2RR(filter string, db *sql.DB) iter.Seq[rrDBData] {
+	return func(yield func(rrDBData) bool) {
+		tx := check1(db.Begin())
+		rows := check1(tx.Query(fmt.Sprintf(`
 		SELECT
 			zone2rr.id, zone2rr.from_parent, zone2rr.from_self,
 			rr_type.name, rr_type.id,
@@ -633,25 +635,28 @@ func getZone2RR(filter string, db *sql.DB, dataChan chan<- rrDBData) {
 		WHERE zone2rr.parsed=FALSE AND %s
 	`, filter)))
 
-	for rows.Next() {
-		var ad rrDBData
-		check(rows.Scan(
-			&ad.id, &ad.fromParent, &ad.fromSelf,
-			&ad.rrType.name, &ad.rrType.id,
-			&ad.rrName.name, &ad.rrName.id,
-			&ad.rrValue.name, &ad.rrValue.id,
-		))
-		dataChan <- ad
-	}
+		for rows.Next() {
+			var ad rrDBData
+			check(rows.Scan(
+				&ad.id, &ad.fromParent, &ad.fromSelf,
+				&ad.rrType.name, &ad.rrType.id,
+				&ad.rrName.name, &ad.rrName.id,
+				&ad.rrValue.name, &ad.rrValue.id,
+			))
+			if !yield(ad) {
+				break
+			}
+		}
 
-	check(rows.Close())
-	check(tx.Commit())
-	close(dataChan)
+		check(rows.Close())
+		check(tx.Commit())
+	}
 }
 
-func getUnqueriedNsecRes(db *sql.DB, dataChan chan<- rrDBData) {
-	tx := check1(db.Begin())
-	rows := check1(tx.Query(`
+func getUnqueriedNsecRes(db *sql.DB) iter.Seq[rrDBData] {
+	return func(yield func(rrDBData) bool) {
+		tx := check1(db.Begin())
+		rows := check1(tx.Query(`
 		SELECT
 			zone_walk_res.zone_id, zone_walk_res.id,
 			rr_name.name, rr_name.id,
@@ -662,22 +667,24 @@ func getUnqueriedNsecRes(db *sql.DB, dataChan chan<- rrDBData) {
 		WHERE zone_walk_res.queried=FALSE
 	`))
 
-	for rows.Next() {
-		rrD := rrDBData{fromSelf: true}
-		check(rows.Scan(
-			&rrD.rrValue.id, &rrD.id,
-			&rrD.rrName.name, &rrD.rrName.id,
-			&rrD.rrType.name, &rrD.rrType.id,
-		))
-		dataChan <- rrD
-	}
+		for rows.Next() {
+			rrD := rrDBData{fromSelf: true}
+			check(rows.Scan(
+				&rrD.rrValue.id, &rrD.id,
+				&rrD.rrName.name, &rrD.rrName.id,
+				&rrD.rrType.name, &rrD.rrType.id,
+			))
+			if !yield(rrD) {
+				break
+			}
+		}
 
-	check(rows.Close())
-	check(tx.Commit())
-	close(dataChan)
+		check(rows.Close())
+		check(tx.Commit())
+	}
 }
 
-func getUnqueriedArpaRoots(db *sql.DB, dataChan chan<- fieldData, anyResponsesChan chan<- bool) {
+func getUnqueriedArpaRoots(db *sql.DB) (iter.Seq[fieldData], bool) {
 	tx := check1(db.Begin())
 	rows := check1(tx.Query(`
 		SELECT id, name
@@ -685,60 +692,50 @@ func getUnqueriedArpaRoots(db *sql.DB, dataChan chan<- fieldData, anyResponsesCh
 	`))
 
 	anyResponses := rows.Next()
-	anyResponsesChan <- anyResponses
-
-	if anyResponses {
-		var fd fieldData
-		check(rows.Scan(&fd.id, &fd.name))
-		dataChan <- fd
-		for rows.Next() {
+	return func(yield func(fieldData) bool) {
+		if anyResponses {
 			var fd fieldData
 			check(rows.Scan(&fd.id, &fd.name))
-			dataChan <- fd
+			_ = yield(fd)
+			for rows.Next() {
+				var fd fieldData
+				check(rows.Scan(&fd.id, &fd.name))
+				if !yield(fd) {
+					break
+				}
+			}
 		}
-	}
 
-	check(rows.Close())
-	check(tx.Commit())
-	close(dataChan)
+		check(rows.Close())
+		check(tx.Commit())
+	}, anyResponses
 }
 
 func readerWriterRecurse[inType any](msg string, db *sql.DB, readerF readerRecurseF[inType], writerF writerF[inType]) {
 	fmt.Println(msg)
 
-	anyResponsesChan := make(chan bool)
-	anyResponses := true
-
+	seq, anyResponses := readerF(db)
 	for anyResponses {
-		inChan := make(chan inType, BUFLEN)
-
-		go readerF(db, inChan, anyResponsesChan)
-		anyResponses = <-anyResponsesChan
-		writerF(db, inChan)
+		writerF(db, seq)
+		seq, anyResponses = readerF(db)
 	}
-	close(anyResponsesChan)
+
+	_, stop := iter.Pull(seq)
+	stop()
 }
 
 func extractNSRR(db *sql.DB) {
-	readerWriter("extracting NS results from RR", db, func(db *sql.DB, rrChan chan<- rrDBData) {
-		getZone2RR("rr_type.name='NS'", db, rrChan)
-	}, insertNSRR)
+	readerWriter("extracting NS results from RR", db, getZone2RR("rr_type.name='NS'", db), insertNSRR)
 }
 
 func extractIPRR(db *sql.DB) {
-	readerWriter("extracting IP results from RR", db, func(db *sql.DB, rrChan chan<- rrDBData) {
-		getZone2RR("(rr_type.name='A' OR rr_type.name='AAAA')", db, rrChan)
-	}, insertIPRR)
+	readerWriter("extracting IP results from RR", db, getZone2RR("(rr_type.name='A' OR rr_type.name='AAAA')", db), insertIPRR)
 }
 
 func extractMXRR(db *sql.DB) {
-	readerWriter("extracting MX results from RR", db, func(db *sql.DB, rrChan chan<- rrDBData) {
-		getZone2RR("rr_type.name='MX'", db, rrChan)
-	}, insertMXRR)
+	readerWriter("extracting MX results from RR", db, getZone2RR("rr_type.name='MX'", db), insertMXRR)
 }
 
 func extractPTRRR(db *sql.DB) {
-	readerWriter("extracting PTR results from RR", db, func(db *sql.DB, rrChan chan<- rrDBData) {
-		getZone2RR("rr_type.name='PTR'", db, rrChan)
-	}, insertPTRRR)
+	readerWriter("extracting PTR results from RR", db, getZone2RR("rr_type.name='PTR'", db), insertPTRRR)
 }

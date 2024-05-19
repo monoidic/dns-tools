@@ -142,19 +142,17 @@ var (
 	patternDmarcTag  = compileExactMatch(`(?P<key>[a-z]+)` + dmarcPatternSep + `(?P<value>.*?)` + ebnfWsp)
 	patternDmarcVer  = compileExactMatch(`DMARC1`)
 	patternUri       = compileExactMatch(dmarcUri + `(?:` + dmarcUriSep + dmarcUri + `)*`)
-	patternPolicy    = compileExactMatch(`none|quarantine|reject`)
-	patternAlignment = compileExactMatch(`r|s`)
+	patternPolicy    = compileExactMatch(`(?:none|quarantine|reject)`)
+	patternAlignment = compileExactMatch(`[rs]`)
 	patternInterval  = compileExactMatch(`[0-9]+`)
 	patternFo        = compileExactMatch(`[01ds](?:` + dmarcFoSep + `[01ds])*`)
 	patternRf        = compileExactMatch(smtpKeyword + `(?:` + dmarcRfSep + smtpKeyword + `)*`)
-	patternPercent   = compileExactMatch(`[0-9]{1,3}`)
+	patternPercent   = compileExactMatch(`(?:100|[1-9]?[0-9])`)
 	patternDmarcSep  = regexp.MustCompile(dmarcSep)
 	patternFoSep     = regexp.MustCompile(dmarcFoSep)
 )
 
-var (
-	patternDmarcTagMap = getPatternNameMap(patternDmarcTag)
-)
+var patternDmarcTagMap = getPatternNameMap(patternDmarcTag)
 
 var dmarcTagToPattern = map[dmarcTag]*regexp.Regexp{
 	dmarcTagP:        patternPolicy,
@@ -270,11 +268,11 @@ func parseDmarc(s string) (dmarcRecord, error) {
 		case dmarcTagASPF:
 			ret.aspf = dmarcAlignmentMap[value]
 		case dmarcTagInterval:
-			if num, err := strconv.ParseUint(value, 10, 32); err == nil {
-				ret.interval = uint32(num)
-			} else {
+			num, err := strconv.ParseUint(value, 10, 32)
+			if err != nil {
 				return ret, err
 			}
+			ret.interval = uint32(num)
 		case dmarcTagFO:
 			ret.fo = 0
 			foParts := patternFoSep.Split(value, -1)
@@ -288,18 +286,16 @@ func parseDmarc(s string) (dmarcRecord, error) {
 		case dmarcTagRF: // TODO something here?
 			ret.rf = value
 		case dmarcTagPct:
-			if num, err := strconv.ParseUint(value, 10, 8); err == nil {
-				if num > 100 {
-					return ret, Error{s: fmt.Sprintf("invalid percent, %d > 100", num)}
-				}
-				ret.pct = uint8(num)
-			} else {
+			num, err := strconv.ParseUint(value, 10, 8)
+			if err != nil {
 				return ret, err
 			}
+			ret.pct = uint8(num)
 		}
 	}
 
-	if desiredMask := dmarcTagMaskP | dmarcTagMaskVer; ret.entryMask&desiredMask != desiredMask {
+	const requiredMask = dmarcTagMaskP | dmarcTagMaskVer
+	if ret.entryMask&requiredMask != requiredMask {
 		return ret, Error{s: "missing v or p tag"}
 	}
 	if ret.entryMask&dmarcTagMaskSP != dmarcTagMaskSP {

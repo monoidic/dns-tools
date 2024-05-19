@@ -2,8 +2,9 @@ package main
 
 import (
 	"database/sql"
+	"iter"
 
-	"github.com/monoidic/dns"
+	"github.com/miekg/dns"
 )
 
 type childParent struct {
@@ -40,10 +41,16 @@ func nameParents(name string) []string {
 }
 
 func mapZoneParents(db *sql.DB) {
-	readerWriter("mapping zone parents", db, getParentCheck, parentCheck)
+	readerWriter("mapping zone parents", db, getDbFieldData(`
+	SELECT name, id
+	FROM name
+	WHERE
+	parent_mapped=FALSE
+	AND valid=TRUE
+`, db), parentCheck)
 }
 
-func parentCheck(db *sql.DB, inChan <-chan fieldData) {
+func parentCheck(db *sql.DB, seq iter.Seq[fieldData]) {
 	tablesFields := map[string]string{
 		"name": "name",
 	}
@@ -54,23 +61,25 @@ func parentCheck(db *sql.DB, inChan <-chan fieldData) {
 		"name_parent": "UPDATE name SET parent_id=? WHERE id=?",
 	}
 
-	cpChan := make(chan childParent, MIDBUFLEN)
-	go addChildParent(inChan, cpChan)
+	childParents := addChildParent(seq)
 
-	netWriterTable(db, cpChan, tablesFields, namesStmts, parentCheckWorker, parentCheckWriter)
+	netWriterTable(db, childParents, tablesFields, namesStmts, parentCheckWorker, parentCheckWriter)
 }
 
-func addChildParent(inChan <-chan fieldData, outChan chan<- childParent) {
-	for fd := range inChan {
-		cp := childParent{child: fd}
+func addChildParent(seq iter.Seq[fieldData]) iter.Seq[childParent] {
+	return func(yield func(childParent) bool) {
+		for fd := range seq {
+			cp := childParent{child: fd}
 
-		if parents := nameParents(fd.name); len(parents) > 0 {
-			cp.parentGuess = parents[0]
+			if parents := nameParents(fd.name); len(parents) > 0 {
+				cp.parentGuess = parents[0]
+			}
+
+			if !yield(cp) {
+				return
+			}
 		}
-
-		outChan <- cp
 	}
-	close(outChan)
 }
 
 func parentCheckWriter(tableMap TableMap, stmtMap StmtMap, res childParent) {

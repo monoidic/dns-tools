@@ -3,11 +3,12 @@ package main
 import (
 	"bufio"
 	"database/sql"
+	"iter"
 	"os"
 	"strings"
 	"sync"
 
-	"github.com/monoidic/dns"
+	"github.com/miekg/dns"
 	"golang.org/x/net/publicsuffix"
 )
 
@@ -33,10 +34,13 @@ type zoneMaybe struct {
 	nxdomain bool
 }
 
-func validMapper(zoneChan <-chan fieldData, outChan chan<- zoneValid, wg *sync.WaitGroup) {
-	for zd := range zoneChan {
+func validMapper(zoneChan <-chan retryWrap[fieldData, empty], refeedChan chan<- retryWrap[fieldData, empty], outChan chan<- zoneValid, wg, retryWg *sync.WaitGroup) {
+	defer wg.Done()
+	for zdw := range zoneChan {
+		zd := zdw.val
 		if zd.name == "." {
 			outChan <- zoneValid{fieldData: zd, status: icannTLD, eTLDplus1: "."}
+			retryWg.Done()
 			continue
 		}
 
@@ -67,12 +71,11 @@ func validMapper(zoneChan <-chan fieldData, outChan chan<- zoneValid, wg *sync.W
 		}
 
 		outChan <- zoneValid{fieldData: zd, status: status, eTLDplus1: dns.Fqdn(eTLDplus1)}
+		retryWg.Done()
 	}
-
-	wg.Done()
 }
 
-func validWriter(db *sql.DB, zoneChan <-chan fieldData) {
+func validWriter(db *sql.DB, seq iter.Seq[fieldData]) {
 	tablesFields := map[string]string{
 		"name": "name",
 	}
@@ -82,7 +85,7 @@ func validWriter(db *sql.DB, zoneChan <-chan fieldData) {
 		"maybe_zone": "UPDATE name SET maybe_zone=TRUE WHERE id=? AND maybe_checked=FALSE AND is_zone=FALSE AND registered=TRUE AND valid=TRUE",
 	}
 
-	netWriter(db, zoneChan, tablesFields, namesStmts, validMapper, validInsert)
+	netWriter(db, seq, tablesFields, namesStmts, validMapper, validInsert)
 }
 
 func validInsert(tableMap TableMap, stmtMap StmtMap, zv zoneValid) {
@@ -100,7 +103,7 @@ func validInsert(tableMap TableMap, stmtMap StmtMap, zv zoneValid) {
 	stmtMap.exec("maybe_zone", etldp1ID)
 }
 
-func getTLDs(_ *sql.DB, tldChan chan<- string) {
+func getTLDs(yield func(string) bool) {
 	fp := check1(os.Open("misc/tld.txt"))
 
 	scanner := bufio.NewScanner(fp)
@@ -115,14 +118,15 @@ func getTLDs(_ *sql.DB, tldChan chan<- string) {
 			s = s[1:]
 		}
 
-		tldChan <- s
+		if !yield(s) {
+			break
+		}
 	}
 
 	check(fp.Close())
-	close(tldChan)
 }
 
-func tldListWriter(db *sql.DB, tldChan <-chan string) {
+func tldListWriter(db *sql.DB, seq iter.Seq[string]) {
 	tablesFields := map[string]string{
 		"name": "name",
 	}
@@ -130,7 +134,7 @@ func tldListWriter(db *sql.DB, tldChan <-chan string) {
 		"maybe_zone": "UPDATE name SET maybe_zone=TRUE WHERE id=? AND maybe_checked=FALSE AND is_zone=FALSE AND registered=TRUE AND valid=TRUE",
 	}
 
-	insertRR(db, tldChan, tablesFields, namesStmts, tldListInsert)
+	insertRR(db, seq, tablesFields, namesStmts, tldListInsert)
 }
 
 func tldListInsert(tableMap TableMap, stmtMap StmtMap, tld string) {
@@ -138,7 +142,7 @@ func tldListInsert(tableMap TableMap, stmtMap StmtMap, tld string) {
 	stmtMap.exec("maybe_zone", tldID)
 }
 
-func maybeZoneWriter(db *sql.DB, fdChan <-chan fieldData) {
+func maybeZoneWriter(db *sql.DB, seq iter.Seq[fieldData]) {
 	tablesFields := map[string]string{
 		"name": "name",
 	}
@@ -147,10 +151,10 @@ func maybeZoneWriter(db *sql.DB, fdChan <-chan fieldData) {
 		"servfail":    "UPDATE name SET maybe_zone=FALSE WHERE id=?",
 	}
 
-	netWriter(db, fdChan, tablesFields, namesStmts, maybeMapper, maybeInsert)
+	netWriter(db, seq, tablesFields, namesStmts, maybeMapper, maybeInsert)
 }
 
-func maybeMapper(fdChan <-chan fieldData, outChan chan<- zoneMaybe, wg *sync.WaitGroup) {
+func maybeMapper(fdChan <-chan retryWrap[fieldData, empty], refeedChan chan<- retryWrap[fieldData, empty], outChan chan<- zoneMaybe, wg, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -164,30 +168,27 @@ func maybeMapper(fdChan <-chan fieldData, outChan chan<- zoneMaybe, wg *sync.Wai
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(fdChan, outChan, msg, maybeZoneResolve, wg)
+	resolverWorker(fdChan, refeedChan, outChan, msg, maybeZoneResolve, wg, retryWg)
 }
 
-func maybeZoneResolve(connCache connCache, msg dns.Msg, fd fieldData) (zm zoneMaybe) {
-	zm.fieldData = fd
-	msg.Question[0].Name = dns.Fqdn(fd.name)
+func maybeZoneResolve(connCache connCache, msg dns.Msg, fd *retryWrap[fieldData, empty]) (zm zoneMaybe, err error) {
+	zm.fieldData = fd.val
+	msg.Question[0].Name = dns.Fqdn(fd.val.name)
 	var response *dns.Msg
-	var err error
 
-	for i := 0; i < RETRIES; i++ {
-		nameserver := randomNS()
-		if response, err = plainResolve(msg, connCache, nameserver); err == nil {
-			break
-		}
+	response, err = plainResolveRandom(msg, connCache)
+	if err != nil {
+		return
 	}
 
 	if response == nil || response.MsgHdr.Rcode == dns.RcodeServerFailure {
 		zm.servfail = true
-		return zm
+		return
 	}
 
 	if response.MsgHdr.Rcode == dns.RcodeNameError { // nxdomain
 		zm.nxdomain = true
-		return zm
+		return
 	}
 
 maybeZoneResolveL:
@@ -199,7 +200,7 @@ maybeZoneResolveL:
 		}
 	}
 
-	return zm
+	return
 }
 
 func maybeInsert(_ TableMap, stmtMap StmtMap, zm zoneMaybe) {
@@ -215,9 +216,17 @@ func insertPSL(db *sql.DB) {
 }
 
 func validateZones(db *sql.DB) {
-	readerWriter("validating zones", db, getValidUncheckedNames, validWriter)
+	readerWriter("validating zones", db, getDbFieldData(`
+	SELECT name, id
+	FROM name AS zone
+	WHERE valid_tried=FALSE
+`, db), validWriter)
 }
 
 func maybeZone(db *sql.DB) {
-	readerWriter("resolving maybe-zones", db, getMaybeZones, maybeZoneWriter)
+	readerWriter("resolving maybe-zones", db, getDbFieldData(`
+	SELECT name.name, name.id
+	FROM name
+	WHERE name.maybe_zone=TRUE
+`, db), maybeZoneWriter)
 }

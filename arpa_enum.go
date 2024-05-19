@@ -4,14 +4,16 @@ import (
 	"bufio"
 	"database/sql"
 	"fmt"
+	"iter"
 	"net/netip"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 
+	"github.com/miekg/dns"
 	"github.com/monoidic/cidranger"
-	"github.com/monoidic/dns"
 )
 
 // database ID for a partial arpa PTR name in the and an array of its children
@@ -48,8 +50,8 @@ var ptrV6Pattern = regexp.MustCompile("....")
 
 // return writerF function for performing arpa queries and writing the results,
 // with a function for generating new subnames given as an argument
-func arpaWriter(translator func(inChan <-chan fieldData, outChan chan<- arpaResults)) writerF[fieldData] {
-	return func(db *sql.DB, fdChan <-chan fieldData) {
+func arpaWriter(translator func(iter.Seq[fieldData]) iter.Seq[arpaResults]) writerF[fieldData] {
+	return func(db *sql.DB, seq iter.Seq[fieldData]) {
 		tablesFields := map[string]string{
 			"name":     "name",
 			"rr_type":  "name",
@@ -62,19 +64,10 @@ func arpaWriter(translator func(inChan <-chan fieldData, outChan chan<- arpaResu
 			"zone2rr":     "INSERT OR IGNORE INTO zone2rr (zone_id, rr_type_id, rr_name_id, rr_value_id) VALUES (?, ?, ?, ?)",
 		}
 
-		resChan := make(chan arpaResults, MIDBUFLEN)
-		var outChan chan arpaResults
+		results := translator(seq)
+		results = filterTranslates(results)
 
-		go translator(fdChan, resChan)
-
-		if netCC != "" {
-			outChan = make(chan arpaResults, MIDBUFLEN)
-			go filterTranslates(resChan, outChan)
-		} else {
-			outChan = resChan
-		}
-
-		netWriter(db, outChan, tablesFields, namesStmts, arpaWorker, arpaWrite)
+		netWriter(db, results, tablesFields, namesStmts, arpaWorker, arpaWrite)
 	}
 }
 
@@ -98,41 +91,46 @@ func getCCRanger() cidranger.Ranger {
 }
 
 // filter arpa names so that only names which have a matching subnet as its child or its most precise covering subnet
-func filterTranslates(resChan <-chan arpaResults, outChan chan<- arpaResults) {
-	ranger := getCCRanger()
-
-	for results := range resChan {
-		var newList []arpaResult
-		for _, result := range results.results {
-			net, err := partialPtrToNet(result.name)
-			if err != nil {
-				continue
-			}
-
-			var match bool
-
-			if coveredNets := check1(ranger.CoveredNetworks(net)); anyRangerMatch(coveredNets) {
-				//fmt.Printf("%s covered in %s\n", net, netCC)
-				match = true
-			} else if coveringNets := check1(ranger.CoveringNetworks(net)); len(coveringNets) > 0 && coveringNets[len(coveringNets)-1].(rangerEntry).match {
-				//fmt.Printf("%s covering in %s\n", net, netCC)
-				match = true
-			}
-
-			if match {
-				newList = append(newList, result)
-				//} else {
-				//	fmt.Printf("%s NOT contained in %s\n", net, netCC)
-			}
-		}
-
-		if len(newList) < len(results.results) {
-			results.results = newList
-		}
-		outChan <- results
+func filterTranslates(seq iter.Seq[arpaResults]) iter.Seq[arpaResults] {
+	if netCC == "" {
+		return seq
 	}
+	return func(yield func(arpaResults) bool) {
+		ranger := getCCRanger()
 
-	close(outChan)
+		for results := range seq {
+			var newList []arpaResult
+			for _, result := range results.results {
+				net, err := partialPtrToNet(result.name)
+				if err != nil {
+					continue
+				}
+
+				var match bool
+
+				if coveredNets := check1(ranger.CoveredNetworks(net)); anyRangerMatch(coveredNets) {
+					// fmt.Printf("%s covered in %s\n", net, netCC)
+					match = true
+				} else if coveringNets := check1(ranger.CoveringNetworks(net)); len(coveringNets) > 0 && coveringNets[len(coveringNets)-1].(rangerEntry).match {
+					// fmt.Printf("%s covering in %s\n", net, netCC)
+					match = true
+				}
+
+				if match {
+					newList = append(newList, result)
+					//} else {
+					//	fmt.Printf("%s NOT contained in %s\n", net, netCC)
+				}
+			}
+
+			if len(newList) < len(results.results) {
+				results.results = newList
+			}
+			if !yield(results) {
+				return
+			}
+		}
+	}
 }
 
 // takes a list of ranger entries and returns true if any of them match
@@ -146,31 +144,37 @@ func anyRangerMatch(in []cidranger.RangerEntry) bool {
 }
 
 // generate addresses for IPv4 PTR records
-func arpaV4Translate(inChan <-chan fieldData, outChan chan<- arpaResults) {
-	for fd := range inChan {
-		res := arpaResults{rootID: fd.id, results: make([]arpaResult, 256)}
-		for i := 0; i < 256; i++ {
-			res.results[i] = arpaResult{name: fmt.Sprintf("%d.%s", i, fd.name)}
+func arpaV4Translate(seq iter.Seq[fieldData]) iter.Seq[arpaResults] {
+	return func(yield func(arpaResults) bool) {
+		for fd := range seq {
+			res := arpaResults{rootID: fd.id, results: make([]arpaResult, 256)}
+			for i := range 256 {
+				res.results[i] = arpaResult{name: fmt.Sprintf("%d.%s", i, fd.name)}
+			}
+			if !yield(res) {
+				return
+			}
 		}
-		outChan <- res
 	}
-	close(outChan)
 }
 
 // generate addresses for IPv6 PTR records
-func arpaV6Translate(inChan <-chan fieldData, outChan chan<- arpaResults) {
-	for fd := range inChan {
-		res := arpaResults{rootID: fd.id, results: make([]arpaResult, 16)}
-		for i, c := range "0123456789abcdef" {
-			res.results[i] = arpaResult{name: fmt.Sprintf("%c.%s", c, fd.name)}
+func arpaV6Translate(seq iter.Seq[fieldData]) iter.Seq[arpaResults] {
+	return func(yield func(arpaResults) bool) {
+		for fd := range seq {
+			res := arpaResults{rootID: fd.id, results: make([]arpaResult, 16)}
+			for i, c := range "0123456789abcdef" {
+				res.results[i] = arpaResult{name: fmt.Sprintf("%c.%s", c, fd.name)}
+			}
+			if !yield(res) {
+				return
+			}
 		}
-		outChan <- res
 	}
-	close(outChan)
 }
 
 // worker performing arpa queries
-func arpaWorker(inChan <-chan arpaResults, outChan chan<- arpaResults, wg *sync.WaitGroup) {
+func arpaWorker(dataChan <-chan retryWrap[arpaResults, arpaResults], refeedChan chan<- retryWrap[arpaResults, arpaResults], outChan chan<- arpaResults, wg, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -184,20 +188,29 @@ func arpaWorker(inChan <-chan arpaResults, outChan chan<- arpaResults, wg *sync.
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(inChan, outChan, msg, arpaResolve, wg)
+	resolverWorker(dataChan, refeedChan, outChan, msg, arpaResolve, wg, retryWg)
 }
 
 // resolve .arpa PTR records
-func arpaResolve(connCache connCache, msg dns.Msg, results arpaResults) arpaResults {
-	for resI, result := range results.results {
+func arpaResolve(connCache connCache, msg dns.Msg, search *retryWrap[arpaResults, arpaResults]) (results arpaResults, err error) {
+	if search.stage == 0 {
+		search.tmp.results = make([]arpaResult, len(search.val.results))
+	}
+
+	for i := search.stage; i < len(search.val.results); i++ {
+		search.stage = i
+		result := search.val.results[i]
 		msg.Question[0].Name = result.name
-		var err error
 		var response *dns.Msg
 
-		for i := 0; i < RETRIES; i++ {
-			nameserver := randomNS()
-			if response, err = plainResolve(msg, connCache, nameserver); err == nil {
-				break
+		response, err = plainResolveRandom(msg, connCache)
+		if err != nil {
+			if search.retriesLeft == 0 {
+				// skip to next
+				search.retriesLeft = RETRIES
+				err = nil
+			} else {
+				return
 			}
 		}
 
@@ -215,9 +228,11 @@ func arpaResolve(connCache connCache, msg dns.Msg, results arpaResults) arpaResu
 			result.nxdomain = true
 		}
 
-		results.results[resI] = result
+		search.tmp.results[i] = result
 	}
-	return results
+	results = search.tmp
+	results.rootID = search.val.rootID
+	return
 }
 
 // write recursed results
@@ -284,7 +299,7 @@ func ptrToIP(s string) (netip.Addr, error) {
 	} else if strings.HasSuffix(s, ".in-addr.arpa.") {
 		s = s[:len(s)-len(".in-addr.arpa.")]
 		l := strings.Split(s, ".")
-		reverseList(l)
+		slices.Reverse(l)
 		s = strings.Join(l, ".")
 	} else {
 		return netip.Addr{}, Error{s: fmt.Sprintf("invalid addr: %q", s)}

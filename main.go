@@ -126,7 +126,7 @@ func main() {
 	}
 
 	if !allowDirectConns {
-		triggeringFlags := make([]string, 0, len(directConns))
+		var triggeringFlags []string
 		for _, key := range directConns {
 			if flags[key].doAction {
 				triggeringFlags = append(triggeringFlags, "-"+key)
