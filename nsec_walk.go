@@ -105,6 +105,13 @@ func nsecWalkResolve(_ connCache, _ dns.Msg, zd *retryWrap[fieldData, empty]) (w
 
 	// fmt.Printf("starting walk on zone %s\n", zone)
 
+	connCaches := make([]connCache, numProcs)
+	for i := range numProcs {
+		cache := getConnCache()
+		connCaches[i] = cache
+		defer cache.clear()
+	}
+
 	for {
 		var expanded bool
 		var wg, workerWg sync.WaitGroup
@@ -118,8 +125,8 @@ func nsecWalkResolve(_ connCache, _ dns.Msg, zd *retryWrap[fieldData, empty]) (w
 		closeChanWait(&wg, workerInChan)
 		closeChanWait(&workerWg, workerOutChan)
 
-		for range numProcs {
-			go nsecWalker(workerInChan, workerOutChan, &wg, &workerWg)
+		for i := range numProcs {
+			go nsecWalker(connCaches[i], workerInChan, workerOutChan, &wg, &workerWg)
 		}
 
 		go func() {
@@ -176,7 +183,7 @@ func nsecWalkResolve(_ connCache, _ dns.Msg, zd *retryWrap[fieldData, empty]) (w
 	return wz, nil
 }
 
-func nsecWalker(inChan <-chan string, outChan chan<- *dns.Msg, wg, workerWg *sync.WaitGroup) {
+func nsecWalker(connCache connCache, inChan <-chan string, outChan chan<- *dns.Msg, wg, workerWg *sync.WaitGroup) {
 	defer workerWg.Done()
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
@@ -192,9 +199,6 @@ func nsecWalker(inChan <-chan string, outChan chan<- *dns.Msg, wg, workerWg *syn
 	}
 	msgSetSize(&msg)
 	msg.Extra[0].(*dns.OPT).SetDo()
-
-	connCache := getConnCache()
-	defer connCache.clear()
 
 	for middle := range inChan {
 		msg.Question[0].Name = middle
