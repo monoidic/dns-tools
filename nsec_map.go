@@ -15,7 +15,7 @@ const (
 	hasNsec3
 )
 
-var rnameBlacklist Set[string] = makeExactSet([]string{
+var rnameBlacklist Set[string] = makeSet([]string{
 	// dns.cloudflare.com.",
 	// "awsdns-hostmaster.amazon.com.",
 	// "hostmaster.nsone.net.",

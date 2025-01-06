@@ -393,7 +393,7 @@ func _getMiddle(zone string, rn rangeset.RangeEntry[string]) iter.Seq[[]string] 
 				endNum = 1
 			}
 
-			for splitS := range splitAscii(startNum, endNum, 5, 20) {
+			for splitS := range splitAscii(startNum, endNum, 2, 20) {
 				res := append([]string{splitS}, common...)
 				if !yield(res) {
 					return
@@ -406,7 +406,7 @@ func _getMiddle(zone string, rn rangeset.RangeEntry[string]) iter.Seq[[]string] 
 				panic(fmt.Sprintf("end splits to nil: %s", end))
 			}
 
-			for _, f := range []middleFunc{decrementLabel} { // nop
+			for _, f := range []middleFunc{} { // nop decrementLabel
 				if !yield(f(splitEnd)) {
 					return
 				}
@@ -418,7 +418,7 @@ func _getMiddle(zone string, rn rangeset.RangeEntry[string]) iter.Seq[[]string] 
 				panic(fmt.Sprintf("start splits to nil: %s", start))
 			}
 
-			for _, f := range []middleFunc{minusAppended, incrementLabel, minusSubdomains, minusSubdomain} { // nop minusSubdomains, minusSubdomain
+			for _, f := range []middleFunc{} { // nop minusSubdomains, minusSubdomain   minusAppended, incrementLabel, minusSubdomains, minusSubdomain
 				if !yield(f(splitStart)) {
 					return
 				}

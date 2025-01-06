@@ -129,14 +129,6 @@ func (s Set[T]) String() string {
 }
 
 func makeSet[T comparable](l []T) Set[T] {
-	ret := make(Set[T])
-	for _, k := range l {
-		ret.Add(k)
-	}
-	return ret
-}
-
-func makeExactSet[T comparable](l []T) Set[T] {
 	ret := make(Set[T], len(l))
 	for _, k := range l {
 		ret.Add(k)
@@ -260,8 +252,12 @@ func collect[T any](seq iter.Seq[T]) []T {
 func chanToSeq[T any](ch <-chan T) iter.Seq[T] {
 	return func(yield func(T) bool) {
 		for e := range ch {
-			// always exhaust chan
-			_ = yield(e)
+			if !yield(e) {
+				break
+			}
+		}
+		// always exhaust chan
+		for range ch {
 		}
 	}
 }
