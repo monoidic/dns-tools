@@ -393,7 +393,7 @@ func _getMiddle(zone string, rn rangeset.RangeEntry[string]) iter.Seq[[]string] 
 				endNum = 1
 			}
 
-			for splitS := range splitAscii(startNum, endNum, 2, 20) {
+			for splitS := range splitAscii(startNum, endNum, splitSize, 20) {
 				res := append([]string{splitS}, common...)
 				if !yield(res) {
 					return
