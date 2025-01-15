@@ -112,6 +112,9 @@ func nsecWalkResolve(_ connCache, _ dns.Msg, zd *retryWrap[fieldData, empty]) (w
 		defer cache.clear()
 	}
 
+	const UNEXP_LIMIT = 3
+	unexp := UNEXP_LIMIT
+
 	for {
 		var expanded bool
 		var wg, workerWg sync.WaitGroup
@@ -175,8 +178,13 @@ func nsecWalkResolve(_ connCache, _ dns.Msg, zd *retryWrap[fieldData, empty]) (w
 			}
 		}
 
-		if !expanded {
-			break
+		if expanded {
+			unexp = UNEXP_LIMIT
+		} else {
+			unexp--
+			if unexp == 0 {
+				break
+			}
 		}
 	}
 
