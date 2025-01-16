@@ -384,9 +384,7 @@ func _getMiddle(zone string, rn rangeset.RangeEntry[string]) iter.Seq[[]string] 
 
 			startNum := big.NewInt(0)
 			endNum := big.NewInt(0)
-			// (38 ** 63) - 1, assumes stuff from util.go
-			const ENDNUM = "3360211291428788092142712546522052463429324340985584366991884014475006149629779669799771752913436671"
-			endNum.SetString(ENDNUM, 10)
+			endNum.SetString(maxLabelNum, 10)
 			var startLen, endLen int
 
 			if commonLabels < len(splitStartCopy) {
@@ -401,7 +399,7 @@ func _getMiddle(zone string, rn rangeset.RangeEntry[string]) iter.Seq[[]string] 
 			if startNum.Cmp(endNum) != -1 {
 				// startNum >= endNum
 				startNum.SetInt64(0)
-				endNum.SetString(ENDNUM, 10)
+				endNum.SetString(maxLabelNum, 10)
 			}
 
 			// TODO could run up against the limit of 255 bytes per name

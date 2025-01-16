@@ -173,13 +173,16 @@ type splitRange struct {
 	afterKnown rangeset.RangeEntry[string]
 }
 
-const fractChars = "-0123456789_abcdefghijklmnopqrstuvwxyz"
+const labelChars = "-0123456789_abcdefghijklmnopqrstuvwxyz"
+
+// (len(labelChars) ** 63) - 1
+const maxLabelNum = "3360211291428788092142712546522052463429324340985584366991884014475006149629779669799771752913436671"
 
 var fractIndexes = fractIndex()
 
 func fractIndex() map[rune]int64 {
-	ret := make(map[rune]int64, len(fractChars))
-	for i, c := range fractChars {
+	ret := make(map[rune]int64, len(labelChars))
+	for i, c := range labelChars {
 		ret[c] = int64(i)
 	}
 	return ret
@@ -195,7 +198,7 @@ func numToLabel(num *big.Int, length int) string {
 	var numIt, div, power, nFractChars, indexMult big.Int
 
 	numIt.Set(num)
-	nFractChars.SetInt64(int64(len(fractChars)))
+	nFractChars.SetInt64(int64(len(labelChars)))
 
 	for i := range length {
 		// div, numIt = divmod(numIt, pow(nFractChars, 62 - i))
@@ -208,7 +211,7 @@ func numToLabel(num *big.Int, length int) string {
 			),
 			&numIt,
 		)
-		buf[i] = fractChars[div.Int64()]
+		buf[i] = labelChars[div.Int64()]
 	}
 
 	return string(buf)
@@ -217,7 +220,7 @@ func numToLabel(num *big.Int, length int) string {
 // converts a DNS label into a bigint
 func labelToNum(s string) *big.Int {
 	var ret, power, indexMult, indexNum, nFractChars big.Int
-	nFractChars.SetInt64(int64(len(fractChars)))
+	nFractChars.SetInt64(int64(len(labelChars)))
 
 	for i, c := range s {
 		// ret += fractIndexes[c] * pow(nFractChars, 62 - i)
