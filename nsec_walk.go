@@ -384,8 +384,8 @@ func _getMiddle(zone string, rn rangeset.RangeEntry[string]) iter.Seq[[]string] 
 
 			startNum := big.NewInt(0)
 			endNum := big.NewInt(0)
-			// (37 ** 63) - 1, assumes stuff from util.go
-			const ENDNUM = "626193587911053268732827767099982579610904461501866669014246836899225819910774694322888478540551852"
+			// (38 ** 63) - 1, assumes stuff from util.go
+			const ENDNUM = "3360211291428788092142712546522052463429324340985584366991884014475006149629779669799771752913436671"
 			endNum.SetString(ENDNUM, 10)
 			var startLen, endLen int
 
