@@ -8,12 +8,12 @@ require (
 	github.com/miekg/dns v1.1.62
 	github.com/monoidic/cidranger v1.0.4
 	github.com/monoidic/rangeset v0.0.0-20240518201828-b04bb4bbbf23
-	golang.org/x/net v0.33.0
+	golang.org/x/net v0.34.0
 )
 
 require (
 	golang.org/x/mod v0.22.0 // indirect
 	golang.org/x/sync v0.10.0 // indirect
 	golang.org/x/sys v0.29.0 // indirect
-	golang.org/x/tools v0.28.0 // indirect
+	golang.org/x/tools v0.29.0 // indirect
 )

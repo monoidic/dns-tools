@@ -173,7 +173,7 @@ type splitRange struct {
 	afterKnown rangeset.RangeEntry[string]
 }
 
-const fractChars = "-0123456789abcdefghijklmnopqrstuvwxyz"
+const fractChars = "-0123456789_abcdefghijklmnopqrstuvwxyz"
 
 var fractIndexes = fractIndex()
 
