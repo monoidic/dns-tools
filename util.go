@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"iter"
-	"math"
+	"math/big"
 	"math/rand"
 	"reflect"
 	"slices"
@@ -173,53 +173,83 @@ type splitRange struct {
 	afterKnown rangeset.RangeEntry[string]
 }
 
-const fractChars = "0123456789-abcdefghijklmnopqrstuvwxyz"
+const fractChars = "-0123456789abcdefghijklmnopqrstuvwxyz"
 
 var fractIndexes = fractIndex()
 
-func fractIndex() map[rune]float64 {
-	ret := make(map[rune]float64, len(fractChars))
+func fractIndex() map[rune]int64 {
+	ret := make(map[rune]int64, len(fractChars))
 	for i, c := range fractChars {
-		ret[c] = float64(i)
+		ret[c] = int64(i)
 	}
 	return ret
 }
 
-// convert a fraction [0-1) into a string
-func fractString(fract float64, length int) string {
+// convert a bigint into a DNS label
+func numToLabel(num *big.Int, length int) string {
+	if !(length >= 1 && length <= 63) {
+		panic("invalid label length")
+	}
+
 	buf := make([]byte, length)
-	fractLen := len(fractChars)
-	fractLenF := float64(fractLen)
+	var numIt, div, power, nFractChars, indexMult big.Int
+
+	numIt.Set(num)
+	nFractChars.SetInt64(int64(len(fractChars)))
 
 	for i := range length {
-		idx := int(fract * fractLenF)
-		if idx == fractLen {
-			idx = fractLen - 1
-		}
-		buf[i] = fractChars[idx]
-		fract = (fract - float64(idx)/fractLenF) * fractLenF
-		if fract < 0 {
-			fract = 0
-		}
+		// div, numIt = divmod(numIt, pow(nFractChars, 62 - i))
+		div.DivMod(
+			&numIt,
+			indexMult.Exp(
+				&nFractChars,
+				power.SetInt64(62-int64(i)),
+				nil,
+			),
+			&numIt,
+		)
+		buf[i] = fractChars[div.Int64()]
 	}
 
 	return string(buf)
 }
 
-// converts a string into a fraction [0-1)
-func stringFract(s string) float64 {
-	var ret float64
+// converts a DNS label into a bigint
+func labelToNum(s string) *big.Int {
+	var ret, power, indexMult, indexNum, nFractChars big.Int
+	nFractChars.SetInt64(int64(len(fractChars)))
+
 	for i, c := range s {
-		ret += fractIndexes[c] / math.Pow(float64(len(fractChars)), float64(i+1))
+		// ret += fractIndexes[c] * pow(nFractChars, 62 - i)
+		ret.Add(&ret,
+			indexNum.Mul(
+				indexNum.SetInt64(fractIndexes[c]),
+				indexMult.Exp(
+					&nFractChars,
+					power.SetInt64(62-int64(i)),
+					nil,
+				),
+			),
+		)
 	}
-	return ret
+
+	return &ret
 }
 
-func splitAscii(start, end float64, n, length int) iter.Seq[string] {
+func splitAscii(start, end *big.Int, n, length int) iter.Seq[string] {
 	return func(yield func(string) bool) {
-		diff := (end - start) / float64(n)
+		var num, nBig, iBig, diff, itNum big.Int
+
+		// diff = (end - start) / n
+		diff.Div(
+			num.Sub(end, start),
+			nBig.SetInt64(int64(n)),
+		)
+
 		for i := 1; i < n; i++ {
-			s := fractString(start+(diff*float64(i)), length)
+			// itNum = start + i * diff
+			itNum.Add(start, itNum.Mul(&diff, iBig.SetInt64(int64(i))))
+			s := numToLabel(&itNum, length)
 			if !yield(s) {
 				break
 			}

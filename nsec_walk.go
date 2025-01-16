@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"iter"
+	"math/big"
 	"slices"
 	"strings"
 	"sync"
@@ -176,6 +177,10 @@ func nsecWalkResolve(_ connCache, _ dns.Msg, zd *retryWrap[fieldData, empty]) (w
 		}
 
 		if !expanded {
+			skippedRanges := collect(wz.unknownRanges)
+			if len(skippedRanges) > 0 {
+				fmt.Printf("skipped ranges: %#v\n", skippedRanges)
+			}
 			break
 		}
 	}
@@ -377,23 +382,31 @@ func _getMiddle(zone string, rn rangeset.RangeEntry[string]) iter.Seq[[]string] 
 			common := splitStartCopy[:commonLabels]
 			slices.Reverse(common)
 
-			var startNum, endNum float64
-			startNum = 0
-			endNum = 1
+			startNum := big.NewInt(0)
+			endNum := big.NewInt(0)
+			// (37 ** 63) - 1, assumes stuff from util.go
+			const ENDNUM = "626193587911053268732827767099982579610904461501866669014246836899225819910774694322888478540551852"
+			endNum.SetString(ENDNUM, 10)
+			var startLen, endLen int
 
 			if commonLabels < len(splitStartCopy) {
-				startNum = stringFract(splitStartCopy[commonLabels])
+				startNum = labelToNum(splitStartCopy[commonLabels])
+				startLen = len(splitStartCopy[commonLabels])
 			}
 			if commonLabels < len(splitEndCopy) {
-				endNum = stringFract(splitEndCopy[commonLabels])
+				endNum = labelToNum(splitEndCopy[commonLabels])
+				endLen = len(splitEndCopy[commonLabels])
 			}
 
-			if startNum >= endNum {
-				startNum = 0
-				endNum = 1
+			if startNum.Cmp(endNum) != -1 {
+				// startNum >= endNum
+				startNum.SetInt64(0)
+				endNum.SetString(ENDNUM, 10)
 			}
 
-			for splitS := range splitAscii(startNum, endNum, splitSize, 20) {
+			// TODO could run up against the limit of 255 bytes per name
+			splitALen := max(20, min(63, 2+max(startLen, endLen)))
+			for splitS := range splitAscii(startNum, endNum, splitSize, splitALen) {
 				res := append([]string{splitS}, common...)
 				if !yield(res) {
 					return
