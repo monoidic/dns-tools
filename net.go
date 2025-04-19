@@ -262,7 +262,7 @@ func clearTTLCache[K comparable, V any](cache *ttlcache.Cache[K, V]) {
 
 // generate ttlcache.WithLoader function for a given protocol to connect to some host if a connection to a given host is not in the cache
 func connCacheLoader(client *dns.Client, proto string) ttlcache.Option[string, *dns.Conn] {
-	return ttlcache.WithLoader[string, *dns.Conn](ttlcache.LoaderFunc[string, *dns.Conn](func(c *ttlcache.Cache[string, *dns.Conn], host string) *ttlcache.Item[string, *dns.Conn] {
+	return ttlcache.WithLoader(ttlcache.LoaderFunc[string, *dns.Conn](func(c *ttlcache.Cache[string, *dns.Conn], host string) *ttlcache.Item[string, *dns.Conn] {
 		prevProto := client.Net
 		client.Net = proto
 		var conn *dns.Conn

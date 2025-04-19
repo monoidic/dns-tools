@@ -97,7 +97,7 @@ func initDb(db *sql.DB) {
 func getFDCLoader(qs string, tx *sql.Tx) (ttlcache.Option[string, []fieldData], func()) {
 	stmt := check1(tx.Prepare(qs))
 
-	cacheF := ttlcache.WithLoader[string, []fieldData](ttlcache.LoaderFunc[string, []fieldData](func(c *ttlcache.Cache[string, []fieldData], zone string) *ttlcache.Item[string, []fieldData] {
+	cacheF := ttlcache.WithLoader(ttlcache.LoaderFunc[string, []fieldData](func(c *ttlcache.Cache[string, []fieldData], zone string) *ttlcache.Item[string, []fieldData] {
 		rows := check1(stmt.Query(zone))
 
 		var ret []fieldData
@@ -275,7 +275,7 @@ func createInsertF(tx *sql.Tx, tableName string, valueName string) (ttlcache.Opt
 	selectStmt := check1(tx.Prepare(fmt.Sprintf("SELECT id FROM %s WHERE %s=? LIMIT 1", tableName, valueName)))
 	insertStmt := check1(tx.Prepare(fmt.Sprintf("INSERT INTO %s (%s) VALUES (?)", tableName, valueName)))
 
-	cacheF := ttlcache.WithLoader[string, int64](ttlcache.LoaderFunc[string, int64](func(c *ttlcache.Cache[string, int64], arg string) *ttlcache.Item[string, int64] {
+	cacheF := ttlcache.WithLoader(ttlcache.LoaderFunc[string, int64](func(c *ttlcache.Cache[string, int64], arg string) *ttlcache.Item[string, int64] {
 		rows := check1(selectStmt.Query(arg))
 
 		var lastID int64
@@ -301,7 +301,7 @@ func createInsertF(tx *sql.Tx, tableName string, valueName string) (ttlcache.Opt
 func createROGetF(tx *sql.Tx, tableName string, valueName string) (ttlcache.Option[string, int64], func()) {
 	selectStmt := check1(tx.Prepare(fmt.Sprintf("SELECT id FROM %s WHERE %s=? LIMIT 1", tableName, valueName)))
 
-	cacheF := ttlcache.WithLoader[string, int64](ttlcache.LoaderFunc[string, int64](func(c *ttlcache.Cache[string, int64], arg string) *ttlcache.Item[string, int64] {
+	cacheF := ttlcache.WithLoader(ttlcache.LoaderFunc[string, int64](func(c *ttlcache.Cache[string, int64], arg string) *ttlcache.Item[string, int64] {
 		rows := check1(selectStmt.Query(arg))
 
 		var item *ttlcache.Item[string, int64]

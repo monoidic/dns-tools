@@ -13,8 +13,6 @@ import (
 	"github.com/monoidic/rangeset"
 )
 
-type middleFunc func([]string) []string
-
 type walkZone struct {
 	zone        string
 	id          int64
@@ -326,37 +324,6 @@ func nsecWalk(db *sql.DB) {
 `, db), nsecWalkMaster)
 }
 
-func decrementLabel(data []string) []string {
-	label := []byte(data[0])
-	label[len(label)-1]--
-	return append([]string{string(label)}, data[1:]...)
-}
-
-func incrementLabel(data []string) []string {
-	label := []byte(data[0])
-	label[len(label)-1]++
-	return append([]string{string(label)}, data[1:]...)
-}
-
-func minusAppended(data []string) []string {
-	ret := make([]string, len(data))
-	copy(ret, data)
-	ret[0] += "-"
-	return ret
-}
-
-func minusSubdomains(data []string) []string {
-	return append([]string{"-", "-"}, data...)
-}
-
-func minusSubdomain(data []string) []string {
-	return append([]string{"-"}, data...)
-}
-
-func nop(data []string) []string {
-	return slices.Clone(data)
-}
-
 // TODO use splitAscii here
 func _getMiddle(zone string, rn rangeset.RangeEntry[string]) iter.Seq[[]string] {
 	start := rn.Start
@@ -412,28 +379,12 @@ func _getMiddle(zone string, rn rangeset.RangeEntry[string]) iter.Seq[[]string] 
 			}
 		}
 
-		if !(end == zone || end == ".") {
-			if splitEnd == nil {
-				panic(fmt.Sprintf("end splits to nil: %s", end))
-			}
-
-			for _, f := range []middleFunc{} { // nop decrementLabel
-				if !yield(f(splitEnd)) {
-					return
-				}
-			}
+		if !(end == zone || end == ".") && splitEnd == nil {
+			panic(fmt.Sprintf("end splits to nil: %s", end))
 		}
 
-		if !(start == zone || start == ".") {
-			if splitStart == nil {
-				panic(fmt.Sprintf("start splits to nil: %s", start))
-			}
-
-			for _, f := range []middleFunc{} { // nop minusSubdomains, minusSubdomain   minusAppended, incrementLabel, minusSubdomains, minusSubdomain
-				if !yield(f(splitStart)) {
-					return
-				}
-			}
+		if (!(start == zone || start == ".")) && splitStart == nil {
+			panic(fmt.Sprintf("start splits to nil: %s", start))
 		}
 	}
 }
