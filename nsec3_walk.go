@@ -465,7 +465,7 @@ func nsec3WalkResolve(connCache connCache, _ dns.Msg, zd *retryWrap[fieldData, e
 		}
 
 		// got everything already
-		fmt.Printf("%d ranges %d known names %s zone discovered\n", len(wz.knownRanges.Ranges), len(wz.rrTypes), wz.percentDiscovered())
+		// fmt.Printf("%d ranges %d known names %s zone discovered\n", len(wz.knownRanges.Ranges), len(wz.rrTypes), wz.percentDiscovered())
 		// fmt.Println(wz.String())
 		if len(wz.knownRanges.Ranges) == 1 {
 			rn := wz.knownRanges.Ranges[0]
