@@ -126,7 +126,7 @@ type hashEntry struct {
 }
 
 func (wz *nsec3WalkZone) addKnown(rn rangeset.RangeEntry[Nsec3Hash], bitmap []uint16) bool {
-	if bytes.Compare(rn.Start.H[:], rn.End.H[:]) == 1 {
+	if bytes.Compare(rn.Start.H[:], rn.End.H[:]) != -1 {
 		// wraparound
 		ret := wz.addKnown(rangeset.RangeEntry[Nsec3Hash]{Start: rn.Start, End: nsec3HashEnd}, bitmap)
 		wz.addKnown(rangeset.RangeEntry[Nsec3Hash]{Start: nsec3HashStart, End: rn.End}, nil)
