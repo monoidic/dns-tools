@@ -329,10 +329,10 @@ func nsec3WalkMaster(db *sql.DB, seq iter.Seq[fieldData]) {
 	}
 
 	namesStmts := map[string]string{
-		"nsec3_params": "INSERT INTO nsec3_zone_params (zone_id, salt, iterations) VALUES (?, ?, ?)",
-		"hash":         "INSERT INTO nsec3_hashes (nsec3_zone_id, nsec3_hash) VALUES ((SELECT id FROM nsec3_zone_params WHERE zone_id=?), ?)",
+		"nsec3_params": "INSERT OR IGNORE INTO nsec3_zone_params (zone_id, salt, iterations) VALUES (?, ?, ?)",
+		"hash":         "INSERT OR IGNORE INTO nsec3_hashes (nsec3_zone_id, nsec3_hash) VALUES ((SELECT id FROM nsec3_zone_params WHERE zone_id=?), ?)",
 		// lol...
-		"hash_rrtype": "INSERT INTO nsec3_hash_rr_map (nsec3_hash_id, rr_type_id) VALUES ((SELECT id FROM nsec3_hashes WHERE nsec3_zone_id=(SELECT id FROM nsec3_zone_params WHERE zone_id=?) AND nsec3_hash=?), ?)",
+		"hash_rrtype": "INSERT OR IGNORE INTO nsec3_hash_rr_map (nsec3_hash_id, rr_type_id) VALUES ((SELECT id FROM nsec3_hashes WHERE nsec3_zone_id=(SELECT id FROM nsec3_zone_params WHERE zone_id=?) AND nsec3_hash=?), ?)",
 		"set_walked":  "UPDATE name SET nsec_walked=TRUE WHERE id=?",
 	}
 
