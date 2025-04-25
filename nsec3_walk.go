@@ -371,6 +371,7 @@ func nsec3Compare(v1, v2 Nsec3Hash) int {
 const (
 	NSEC3_WALK_LIMIT      = 1 << 34
 	UNEXPANDED_RUNS_LIMIT = 3
+	MIN_DIFF              = 1024
 )
 
 func nsec3WalkResolve(connCache connCache, _ dns.Msg, zd *retryWrap[fieldData, empty]) (nsec3WalkZone, error) {
@@ -401,6 +402,8 @@ func nsec3WalkResolve(connCache connCache, _ dns.Msg, zd *retryWrap[fieldData, e
 	encodedZone := make([]byte, 255)
 	off := check1(dns.PackDomainName(wz.zone, encodedZone, 0, nil, false))
 	encodedZone = encodedZone[:off]
+
+	minDiff := big.NewInt(MIN_DIFF)
 
 	for {
 		expanded = false
@@ -457,7 +460,7 @@ func nsec3WalkResolve(connCache connCache, _ dns.Msg, zd *retryWrap[fieldData, e
 
 					diff := &big.Int{}
 					diff = diff.Sub(bigNum, smallNum)
-					if diff.Int64() < 1024 {
+					if diff.Cmp(minDiff) == -1 {
 						// unrealistically small differnce
 						return nsec3WalkZone{}, errors.New("nsec3 white lies?")
 					}
