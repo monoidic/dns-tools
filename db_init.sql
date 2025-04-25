@@ -1,4 +1,3 @@
-
 CREATE TABLE IF NOT EXISTS name
 (
     id              INTEGER PRIMARY KEY,
@@ -205,7 +204,8 @@ INSERT OR IGNORE INTO nsec_state (id, name) VALUES
 (2, 'secure_nsec'   ),
 (3, 'plain_nsec'    ),
 (4, 'nsec3'         ),
-(5, 'nsec_confusion');
+(5, 'nsec_confusion'),
+(6, 'secure_nsec3'  );
 
 CREATE TABLE IF NOT EXISTS unwalked_root
 (

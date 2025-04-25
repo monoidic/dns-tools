@@ -448,7 +448,20 @@ func nsec3WalkResolve(connCache connCache, _ dns.Msg, zd *retryWrap[fieldData, e
 					endLabel := rrT.NextDomain
 					check1(base32.HexEncoding.Decode(start.H[:], []byte(startLabel)))
 					check1(base32.HexEncoding.Decode(end.H[:], []byte(endLabel)))
-					normalizeRR(rrT)
+
+					smallNum := start.toNum()
+					bigNum := end.toNum()
+					if smallNum.Cmp(bigNum) == 1 {
+						smallNum, bigNum = bigNum, smallNum
+					}
+
+					diff := &big.Int{}
+					diff = diff.Sub(bigNum, smallNum)
+					if diff.Int64() < 1024 {
+						// unrealistically small differnce
+						return nsec3WalkZone{}, errors.New("nsec3 white lies?")
+					}
+
 					if wz.addKnown(rangeset.RangeEntry[Nsec3Hash]{Start: start, End: end}, rrT.TypeBitMap) {
 						expanded = true
 					}
