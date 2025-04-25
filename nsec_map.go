@@ -2,7 +2,9 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
 	"iter"
+	"slices"
 	"strings"
 	"sync"
 
@@ -10,8 +12,7 @@ import (
 )
 
 const (
-	hasNsec3param uint = 1 << iota
-	hasNsec
+	hasNsec uint = 1 << iota
 	hasNsec3
 )
 
@@ -48,13 +49,9 @@ func checkBlacklisted(mname, rname string) bool {
 	return false
 }
 
-func getNsecState(nsec3param string, nsecSigs []dns.NSEC, nsec3Sigs []dns.NSEC3) (string, string) {
+func getNsecState(nsecSigs []dns.NSEC, nsec3Sigs []dns.NSEC3) (string, string) {
 	var nsecT uint
 	var nsecS string
-
-	if nsec3param != "" {
-		nsecT |= hasNsec3param
-	}
 
 	if len(nsecSigs) > 0 {
 		nsecT |= hasNsec
@@ -83,17 +80,22 @@ func getNsecState(nsec3param string, nsecSigs []dns.NSEC, nsec3Sigs []dns.NSEC3)
 		nsecS = strings.Join(nsecSArr, "|")
 		return nsecType, nsecS
 
-	case hasNsec3param: // regular nsec3
-		return "nsec3", nsec3param
+	case hasNsec3:
+		nsecType := "nsec3"
+		for _, rrT := range nsec3Sigs {
+			start, end := nsec3RRToHashes(&rrT)
+			if lableDiffSmall(start, end) {
+				nsecType = "secure_nsec3"
+			}
+			nsecSArr = append(nsecSArr, fmt.Sprintf("%s^%s", start, end))
+		}
+		nsecS = strings.Join(nsecSArr, "|")
+		return nsecType, nsecS
 
-	default: // nsec confusion, strange response
+	default: // both nsec and nsec3?
 		var prefix []string
 		var suffix []string
 
-		if nsecT&hasNsec3param != 0 {
-			prefix = append(prefix, "nsec3param")
-			suffix = append(suffix, nsec3param)
-		}
 		if nsecT&hasNsec > 0 {
 			prefix = append(prefix, "nsec")
 			builder := make([]string, 0, len(nsecSigs))
@@ -105,8 +107,9 @@ func getNsecState(nsec3param string, nsecSigs []dns.NSEC, nsec3Sigs []dns.NSEC3)
 		if nsecT&hasNsec3 > 0 {
 			prefix = append(prefix, "nsec3")
 			builder := make([]string, 0, len(nsec3Sigs))
-			for _, rr := range nsec3Sigs {
-				builder = append(builder, rr.String())
+			for _, rrT := range nsec3Sigs {
+				start, end := nsec3RRToHashes(&rrT)
+				builder = append(builder, fmt.Sprintf("%s^%s", start, end))
 			}
 			suffix = append(suffix, strings.Join(builder, "|"))
 		}
@@ -128,7 +131,7 @@ func checkNsecWorker(dataChan <-chan retryWrap[fieldData, empty], refeedChan cha
 		},
 		Question: []dns.Question{{
 			Qclass: dns.ClassINET,
-			Qtype:  dns.TypeNSEC3PARAM,
+			Qtype:  dns.TypeAPL,
 		}},
 	}
 	msgSetSize(&msg)
@@ -137,29 +140,27 @@ func checkNsecWorker(dataChan <-chan retryWrap[fieldData, empty], refeedChan cha
 	resolverWorker(dataChan, refeedChan, outChan, msg, checkNsecQuery, wg, retryWg)
 }
 
+func zoneRandomName(zone string) string {
+	encodedZone := make([]byte, 255)
+	off := check1(dns.PackDomainName(zone, encodedZone, 0, nil, false))
+	encodedZone = encodedZone[:off]
+
+	for guess := range genHashes(encodedZone, nil, 0) {
+		ret := string(slices.Concat(guess.label, []byte("."), []byte(zone)))
+		return ret
+	}
+	panic("unreachable")
+}
+
 func checkNsecQuery(connCache connCache, msg dns.Msg, fd *retryWrap[fieldData, empty]) (fdr fdResults, err error) {
-	var nsecState, rname, mname, nsec3param, nsecS string
+	var nsecState, rname, mname, nsecS string
 	var res *dns.Msg
 
-	msg.Question[0].Name = fd.val.name
+	msg.Question[0].Name = zoneRandomName(fd.val.name)
 
 	res, err = plainResolveRandom(msg, connCache)
 	if err != nil {
 		return
-	}
-
-	if res.Rcode != dns.RcodeSuccess {
-		fdr = fdResults{fieldData: fd.val} // empty
-		return
-	}
-
-nsec3paramLoop:
-	for _, rr := range res.Answer {
-		switch rrT := rr.(type) {
-		case *dns.NSEC3PARAM:
-			nsec3param = rrT.String()
-			break nsec3paramLoop
-		}
 	}
 
 	var nsecSigs []dns.NSEC
@@ -174,7 +175,7 @@ nsec3paramLoop:
 		}
 	}
 
-	nsecState, nsecS = getNsecState(nsec3param, nsecSigs, nsec3Sigs)
+	nsecState, nsecS = getNsecState(nsecSigs, nsec3Sigs)
 
 	if nsecState == "" { // no nsec/nsec3/nsec3param
 		// fmt.Printf("continue 2: no nsec info for %s\n", fd.name)

@@ -24,6 +24,49 @@ type Nsec3Hash struct {
 	H [20]byte
 }
 
+func (nh Nsec3Hash) String() string {
+	return string(base32.HexEncoding.AppendEncode(nil, nh.H[:]))
+}
+
+func labelToNsec3Hash(label string) Nsec3Hash {
+	var ret Nsec3Hash
+	label = strings.ToUpper(label)
+	check1(base32.HexEncoding.Decode(ret.H[:], []byte(label)))
+	return ret
+}
+
+func nsec3RRToHashes(rrT *dns.NSEC3) (Nsec3Hash, Nsec3Hash) {
+	start := labelToNsec3Hash(dns.SplitDomainName(rrT.Hdr.Name)[0])
+	end := labelToNsec3Hash(rrT.NextDomain)
+
+	return start, end
+}
+
+func labelDiff(start, end Nsec3Hash) *big.Int {
+	total := &big.Int{}
+	switch bytes.Compare(start.H[:], end.H[:]) {
+	case 0: // covers whole zone
+		return nsec3Total()
+	case -1: // start < end
+		startNum := start.toNum()
+		endNum := end.toNum()
+		total = total.Sub(startNum, endNum)
+	case 1: // start > end, wraparound
+		startNum := start.toNum()
+		endNum := end.toNum()
+
+		// add up start to ffff... + 0000... to end (=> start to ffff... + end)
+		startNum = startNum.Sub(nsec3HashEnd.toNum(), startNum)
+		total = total.Add(startNum, endNum)
+	}
+
+	return total
+}
+
+func lableDiffSmall(start, end Nsec3Hash) bool {
+	return minDiff.Cmp(labelDiff(start, end)) != -1
+}
+
 func (nh *Nsec3Hash) toNum() *big.Int {
 	ret := big.NewInt(0)
 	part := big.NewInt(0)
@@ -66,7 +109,7 @@ func (wz *nsec3WalkZone) contains(hash Nsec3Hash) bool {
 	return wz.knownRanges.Contains(hash)
 }
 
-func (wz *nsec3WalkZone) String() string {
+func (wz nsec3WalkZone) String() string {
 	var sb strings.Builder
 
 	var nonFirst bool
@@ -374,6 +417,8 @@ const (
 	MIN_DIFF              = 1024
 )
 
+var minDiff = big.NewInt(MIN_DIFF)
+
 func nsec3WalkResolve(connCache connCache, _ dns.Msg, zd *retryWrap[fieldData, empty]) (nsec3WalkZone, error) {
 	wz := nsec3WalkZone{
 		zone:        zd.val.name,
@@ -402,8 +447,6 @@ func nsec3WalkResolve(connCache connCache, _ dns.Msg, zd *retryWrap[fieldData, e
 	encodedZone := make([]byte, 255)
 	off := check1(dns.PackDomainName(wz.zone, encodedZone, 0, nil, false))
 	encodedZone = encodedZone[:off]
-
-	minDiff := big.NewInt(MIN_DIFF)
 
 	for {
 		expanded = false
@@ -446,22 +489,9 @@ func nsec3WalkResolve(connCache connCache, _ dns.Msg, zd *retryWrap[fieldData, e
 						return nsec3WalkZone{}, errors.New("nsec3 params changed")
 					}
 
-					var start, end Nsec3Hash
-					startLabel := strings.ToUpper(dns.SplitDomainName(rrT.Hdr.Name)[0])
-					endLabel := rrT.NextDomain
-					check1(base32.HexEncoding.Decode(start.H[:], []byte(startLabel)))
-					check1(base32.HexEncoding.Decode(end.H[:], []byte(endLabel)))
+					start, end := nsec3RRToHashes(rrT)
 
-					smallNum := start.toNum()
-					bigNum := end.toNum()
-					if smallNum.Cmp(bigNum) == 1 {
-						smallNum, bigNum = bigNum, smallNum
-					}
-
-					diff := &big.Int{}
-					diff = diff.Sub(bigNum, smallNum)
-					if diff.Cmp(minDiff) == -1 {
-						// unrealistically small differnce
+					if lableDiffSmall(start, end) {
 						return nsec3WalkZone{}, errors.New("nsec3 white lies?")
 					}
 
