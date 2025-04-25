@@ -139,10 +139,6 @@ func (wz *nsec3WalkZone) addKnown(rn rangeset.RangeEntry[Nsec3Hash], bitmap []ui
 
 	wz.knownRanges.Add(rn)
 
-	if bitmap == nil {
-		return true
-	}
-
 	var nsecTypes []string
 	for _, t := range bitmap {
 		switch t {
