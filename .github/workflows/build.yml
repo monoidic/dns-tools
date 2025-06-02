@@ -30,7 +30,7 @@ jobs:
     - run: sudo sh -c 'apt update && apt install qemu-user-static'
 
     # build in alpine chroot to allow for the binary to be static
-    - run: wget -O rootfs.tgz https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/${{ matrix.arch }}/alpine-minirootfs-3.18.3-${{ matrix.arch }}.tar.gz
+    - run: wget -O rootfs.tgz https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/${{ matrix.arch }}/alpine-minirootfs-3.22.0-${{ matrix.arch }}.tar.gz
     - run: mkdir rootfs
     - run: sudo tar -C rootfs -xf rootfs.tgz
     - run: sudo mkdir rootfs/src
