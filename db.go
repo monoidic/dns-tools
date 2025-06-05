@@ -481,3 +481,7 @@ func extractMXRR(db *sql.DB) {
 func extractPTRRR(db *sql.DB) {
 	readerWriter("extracting PTR results from RR", db, getZone2RR("rr_type.name='PTR'", db), insertPTRRR)
 }
+
+func extractZoneNsIP(db *sql.DB) {
+	readerWriter("mapping zone to NS IP mappings", db, zoneNsIpReader(db), insertZoneNsIp)
+}

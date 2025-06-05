@@ -19,7 +19,6 @@ CREATE TABLE IF NOT EXISTS name
     addr_resolved   INTEGER NOT NULL DEFAULT FALSE,
     spf_tried       INTEGER NOT NULL DEFAULT FALSE,
     dmarc_tried     INTEGER NOT NULL DEFAULT FALSE, -- so that '_dmarc.${name}' does not need to be stored
-    axfr_tried      INTEGER NOT NULL DEFAULT FALSE,
     valid           INTEGER NOT NULL DEFAULT TRUE,  -- has valid parent zone chain/TLD
     valid_tried     INTEGER NOT NULL DEFAULT FALSE, -- validation has been verified
     parent_mapped   INTEGER NOT NULL DEFAULT FALSE,
@@ -75,13 +74,14 @@ CREATE TABLE IF NOT EXISTS name_ip
     UNIQUE(name_id, ip_id)
 );
 
-CREATE TABLE IF NOT EXISTS axfrable_ns
-(
+CREATE TABLE IF NOT EXISTS zone_ns_ip (
     id          INTEGER PRIMARY KEY,
-    ip_id       INTEGER NOT NULL REFERENCES ip(id),
-    zone_id     INTEGER NOT NULL REFERENCES name(id),
+    zone_id     INTEGER NOT NULL REFERENCES name(id), -- zone, e.g example.com.
+    ip_id       INTEGER NOT NULL REFERENCES ip(id),   -- ns ip, e.g 1.2.3.4 for ns1.example.com
+    axfr_tried  INTEGER NOT NULL DEFAULT FALSE,
+    axfrable    INTEGER NOT NULL DEFAULT FALSE,
     scan_time   INTEGER NOT NULL DEFAULT 0,
-    UNIQUE(ip_id, zone_id)
+    UNIQUE(zone_id, ip_id)
 );
 
 CREATE TABLE IF NOT EXISTS spf

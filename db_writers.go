@@ -19,8 +19,8 @@ func insertRRWorker(db *sql.DB, seq iter.Seq[rrData]) {
 	namesStmts := map[string]string{
 		"insert":           "INSERT OR IGNORE INTO zone2rr (zone_id, rr_type_id, rr_name_id, rr_value_id, poison) VALUES (?, ?, ?, ?, ?)",
 		"update":           "UPDATE name SET inserted=TRUE, is_zone=TRUE WHERE id=?",
-		"vuln_ns":          "INSERT INTO axfrable_ns (ip_id, zone_id, scan_time) VALUES (?, ?, ?) ON CONFLICT DO UPDATE SET scan_time=excluded.scan_time",
-		"axfr_tried":       "UPDATE name SET axfr_tried=TRUE WHERE id=?",
+		"vuln_ns":          "UPDATE zone_ns_ip SET axfrable=TRUE, scan_time=? WHERE ip_id=? AND zone_id=?",
+		"axfr_tried":       "UPDATE zone_ns_ip SET axfr_tried=TRUE WHERE ip_id=? AND zone_id=?",
 		"self_parent_zone": "UPDATE zone2rr SET from_self=from_self|?, from_parent=from_parent|? WHERE zone_id=? AND rr_type_id=? AND rr_name_id=? AND rr_value_id=?",
 	}
 
@@ -52,13 +52,14 @@ func insertRRW(tableMap TableMap, stmtMap StmtMap, rrD rrData) {
 		ipID := tableMap.get("ip", rrD.ip)
 		zoneID := tableMap.get("name", rrD.zone)
 
-		stmtMap.exec("vuln_ns", ipID, zoneID, rrD.scanned)
+		stmtMap.exec("vuln_ns", rrD.scanned, ipID, zoneID)
 		stmtMap.exec("update", zoneID)
 
 	case rrDataZoneAxfrTry:
+		ipID := tableMap.get("ip", rrD.ip)
 		zoneID := tableMap.get("name", rrD.zone)
 
-		stmtMap.exec("axfr_tried", zoneID)
+		stmtMap.exec("axfr_tried", ipID, zoneID)
 	}
 }
 
@@ -200,4 +201,16 @@ func ptrRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
 	}
 
 	stmtMap.exec("parsed", ad.id)
+}
+
+func insertZoneNsIp(db *sql.DB, seq iter.Seq[zoneIP]) {
+	tablesFields := map[string]string{}
+	namesStmts := map[string]string{
+		"zone_ns_ip": "INSERT OR IGNORE INTO zone_ns_ip (zone_id, ip_id) VALUES(?, ?)",
+	}
+	insertRR(db, seq, tablesFields, namesStmts, zoneNsIpRRF)
+}
+
+func zoneNsIpRRF(_tableMap TableMap, stmtMap StmtMap, zip zoneIP) {
+	stmtMap.exec("zone_ns_ip", zip.zone.id, zip.ip.id)
 }

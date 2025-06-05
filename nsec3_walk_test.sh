@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 
 bin="~/go/bin/dns-tools"
-db="/tmp/testx.sqlite3"
+#db="/tmp/testx.sqlite3"
+db=$(mktemp /tmp/testx.XXXXXX.sqlite3)
 
 scan() {
 	eval "$bin" -db "$db" $*

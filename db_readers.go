@@ -63,3 +63,30 @@ func netZoneReader(db *sql.DB, extraFilter string) iter.Seq[fieldData] {
 	`, extraFilter)
 	return getDbFieldData(qs, db)
 }
+
+func zoneNsIpReader(db *sql.DB) iter.Seq[zoneIP] {
+	return func(yield func(zoneIP) bool) {
+		qs := `
+		SELECT DISTINCT zone.name, ip.address, zone.id, ip.id
+		FROM zone_ns
+		INNER JOIN name_ip ON zone_ns.ns_id = name_ip.name_id
+		INNER JOIN ip ON name_ip.ip_id = ip.id
+		INNER JOIN name AS zone ON zone_ns.zone_id = zone.id
+		WHERE zone.is_zone=TRUE
+	`
+
+		tx := check1(db.Begin())
+		rows := check1(tx.Query(qs))
+
+		for rows.Next() {
+			var zip zoneIP
+			check(rows.Scan(&zip.zone.name, &zip.ip.name, &zip.zone.id, &zip.ip.id))
+			if !yield(zip) {
+				break
+			}
+		}
+
+		check(rows.Close())
+		check(tx.Commit())
+	}
+}

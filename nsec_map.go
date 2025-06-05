@@ -36,11 +36,13 @@ func getNsecState(nsecSigs []dns.NSEC, nsec3Sigs []dns.NSEC3) (string, string) {
 	case hasNsec: // regular nsec
 		nsecType := "plain_nsec"
 		for _, rr := range nsecSigs {
-			decoded := []byte(rr.NextDomain)
-			decoded = doDDD(decoded)
-			switch decoded[0] {
-			case '\x00', '!', '~':
-				nsecType = "secure_nsec"
+			for _, s := range []string{rr.Hdr.Name, rr.NextDomain} {
+				decoded := []byte(s)
+				decoded = doDDD(decoded)
+				switch decoded[0] {
+				case '\x00', '!', '~':
+					nsecType = "secure_nsec"
+				}
 			}
 			nsecSArr = append(nsecSArr, rr.Hdr.Name+"^"+rr.NextDomain)
 		}

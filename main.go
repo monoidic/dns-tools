@@ -74,7 +74,8 @@ var flags = map[string]*flagData{
 	"spf_links":         {description: "attempt to fetch linked SPF records", function: spfLinks},
 	"dmarc":             {description: "attempt to fetch DMARC records", function: dmarc},
 	"chaos":             {description: "attempt to get info on authoritative nameservers themselves", function: chaosTXT},
-	"maybe_zone":        {description: "check whether \"maybe-zone\" names are zones", function: maybeZone},
+	"maybe_zone":        {description: `check whether "maybe-zone" names are zones`, function: maybeZone},
+	"zone_ns_ip":        {description: "map out zone<=>ns_ip for AXFR", function: extractZoneNsIP},
 }
 
 var (
@@ -83,6 +84,7 @@ var (
 		"arpa_v4", "arpa_v6",
 		"rr_ns", "rr_mx", "rr_ip", "rr_ptr",
 		"net_ns", "net_mx", "net_ip", "net_ptr",
+		"zone_ns_ip",
 		"check_up",
 		"nsec_map", "zone_walk", "nsec3_walk", "zone_walk_results",
 		"axfr", "psl", "validate", "parent_map", "parent_ns",

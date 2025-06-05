@@ -177,7 +177,7 @@ func axfrV4Only(seq iter.Seq[zoneIP]) iter.Seq[zoneIP] {
 func publicAxfr(db *sql.DB) {
 	fmt.Println("checking public AXFR")
 
-	zoneIPs := zoneIPReader(db, "AND zone.axfr_tried=FALSE")
+	zoneIPs := zoneIPReader(db)
 	zoneIPs = axfrWhitelist(zoneIPs)
 	zoneIPs = axfrV4Only(zoneIPs)
 

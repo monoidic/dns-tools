@@ -259,25 +259,24 @@ func checkUpReader(db *sql.DB) iter.Seq[checkUpData] {
 }
 
 // `readerF` for A/AAAA
-func zoneIPReader(db *sql.DB, extraFilter string) iter.Seq[zoneIP] {
+func zoneIPReader(db *sql.DB) iter.Seq[zoneIP] {
 	return func(yield func(zoneIP) bool) {
-		qs := fmt.Sprintf(`
-		SELECT DISTINCT zone.name, ip.address, zone.id, ip.id
-		FROM zone_ns
-		INNER JOIN name_ip ON zone_ns.ns_id = name_ip.name_id
-		INNER JOIN ip ON name_ip.ip_id = ip.id
-		INNER JOIN name AS zone ON zone_ns.zone_id = zone.id
-		WHERE ip.responsive=TRUE %s
-	`, extraFilter)
+		qs := `
+		SELECT zone.name, ip.address
+		FROM zone_ns_ip
+		INNER JOIN name AS zone ON zone_ns_ip.zone_id=zone.id
+		INNER JOIN ip ON zone_ns_ip.ip_id = ip.id
+		WHERE ip.responsive=TRUE AND zone_ns_ip.axfr_tried=FALSE
+	`
 
 		tx := check1(db.Begin())
 		rows := check1(tx.Query(qs))
 
 		for rows.Next() {
-			var zone, ip fieldData
-			check(rows.Scan(&zone.name, &ip.name, &zone.id, &ip.id))
-			ip.name = net.JoinHostPort(ip.name, "53")
-			if !yield(zoneIP{zone: zone, ip: ip}) {
+			var zip zoneIP
+			check(rows.Scan(&zip.zone.name, &zip.ip.name))
+			zip.ip.name = net.JoinHostPort(zip.ip.name, "53")
+			if !yield(zip) {
 				break
 			}
 		}

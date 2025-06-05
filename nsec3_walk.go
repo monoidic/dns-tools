@@ -48,7 +48,7 @@ func labelDiff(start, end Nsec3Hash) *big.Int {
 	case 0: // covers whole zone
 		return nsec3Total()
 	case -1: // start < end
-		total = total.Sub(start.toNum(), end.toNum())
+		total = total.Sub(end.toNum(), start.toNum())
 	case 1: // start > end, wraparound
 		// add up start to ffff... + 0000... to end (=> ffff... - start  + end)
 		total = total.Sub(nsec3HashEnd.toNum(), start.toNum())
@@ -59,7 +59,7 @@ func labelDiff(start, end Nsec3Hash) *big.Int {
 }
 
 func labelDiffSmall(start, end Nsec3Hash) bool {
-	return minDiff.Cmp(labelDiff(start, end)) == -1
+	return minDiff.Cmp(labelDiff(start, end)) != -1
 }
 
 func (nh *Nsec3Hash) toNum() *big.Int {
