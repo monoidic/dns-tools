@@ -11,7 +11,6 @@ import (
 	"sync"
 
 	"github.com/miekg/dns"
-	"github.com/monoidic/rangeset"
 )
 
 func normalizeRR(rr dns.RR) {
@@ -128,14 +127,6 @@ func (s Set[T]) String() string {
 	return b.String()
 }
 
-func makeSet[T comparable](l []T) Set[T] {
-	ret := make(Set[T], len(l))
-	for _, k := range l {
-		ret.Add(k)
-	}
-	return ret
-}
-
 // select random nameserver from config
 func randomNS() string {
 	return usedNs[rand.Intn(usedNsLen)]
@@ -166,11 +157,6 @@ func reverseASCII(s string) string {
 	b := []byte(s)
 	slices.Reverse(b)
 	return string(b)
-}
-
-type splitRange struct {
-	prevKnown  rangeset.RangeEntry[string]
-	afterKnown rangeset.RangeEntry[string]
 }
 
 const labelChars = "-0123456789_abcdefghijklmnopqrstuvwxyz"

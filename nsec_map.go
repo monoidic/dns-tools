@@ -16,39 +16,6 @@ const (
 	hasNsec3
 )
 
-var rnameBlacklist Set[string] = makeSet([]string{
-	// dns.cloudflare.com.",
-	// "awsdns-hostmaster.amazon.com.",
-	// "hostmaster.nsone.net.",
-	// "admin.dnsimple.com.",
-	// "administrator.dynu.com.",
-	// "hostmaster.hichina.com.",
-	// "hostmaster.eurodns.com.",
-	// "tech.brandshelter.com.",
-	// "hostmaster.vismasoftware.no.",
-	// "domainadm.visma.com.",
-})
-
-// TODO split string a.b.c.d.e into e, d.e and c.d.e (length depends on longest suffix) and check if they appear in a set of these values?
-var mnameBlacklistSuffixes []string = []string{
-	// "ultradns.com.",
-}
-
-// TODO try to check nsecS itself and/or improve blacklist
-func checkBlacklisted(mname, rname string) bool {
-	if rnameBlacklist.Contains(rname) {
-		return true
-	}
-
-	for _, suffix := range mnameBlacklistSuffixes {
-		if strings.HasSuffix(mname, suffix) {
-			return true
-		}
-	}
-
-	return false
-}
-
 func getNsecState(nsecSigs []dns.NSEC, nsec3Sigs []dns.NSEC3) (string, string) {
 	var nsecT uint
 	var nsecS string
@@ -72,7 +39,7 @@ func getNsecState(nsecSigs []dns.NSEC, nsec3Sigs []dns.NSEC3) (string, string) {
 			decoded := []byte(rr.NextDomain)
 			decoded = doDDD(decoded)
 			switch decoded[0] {
-			case '\x00', '!':
+			case '\x00', '!', '~':
 				nsecType = "secure_nsec"
 			}
 			nsecSArr = append(nsecSArr, rr.Hdr.Name+"^"+rr.NextDomain)
@@ -84,7 +51,7 @@ func getNsecState(nsecSigs []dns.NSEC, nsec3Sigs []dns.NSEC3) (string, string) {
 		nsecType := "nsec3"
 		for _, rrT := range nsec3Sigs {
 			start, end := nsec3RRToHashes(&rrT)
-			if lableDiffSmall(start, end) {
+			if labelDiffSmall(start, end) {
 				nsecType = "secure_nsec3"
 			}
 			nsecSArr = append(nsecSArr, fmt.Sprintf("%s^%s", start, end))
@@ -107,8 +74,8 @@ func getNsecState(nsecSigs []dns.NSEC, nsec3Sigs []dns.NSEC3) (string, string) {
 		if nsecT&hasNsec3 > 0 {
 			prefix = append(prefix, "nsec3")
 			builder := make([]string, 0, len(nsec3Sigs))
-			for _, rrT := range nsec3Sigs {
-				start, end := nsec3RRToHashes(&rrT)
+			for _, rr := range nsec3Sigs {
+				start, end := nsec3RRToHashes(&rr)
 				builder = append(builder, fmt.Sprintf("%s^%s", start, end))
 			}
 			suffix = append(suffix, strings.Join(builder, "|"))
@@ -145,11 +112,12 @@ func zoneRandomName(zone string) string {
 	off := check1(dns.PackDomainName(zone, encodedZone, 0, nil, false))
 	encodedZone = encodedZone[:off]
 
+	var ret string
 	for guess := range genHashes(encodedZone, nil, 0) {
-		ret := string(slices.Concat(guess.label, []byte("."), []byte(zone)))
-		return ret
+		ret = string(slices.Concat(guess.label, []byte("."), []byte(zone)))
+		break
 	}
-	panic("unreachable")
+	return ret
 }
 
 func checkNsecQuery(connCache connCache, msg dns.Msg, fd *retryWrap[fieldData, empty]) (fdr fdResults, err error) {
@@ -225,10 +193,6 @@ soaLoop:
 			fdr = fdResults{fieldData: fd.val}
 			return
 		}
-	}
-
-	if nsecState == "plain_nsec" && checkBlacklisted(mname, rname) {
-		nsecState = "secure_nsec"
 	}
 
 	fdr = fdResults{fieldData: fd.val, results: []string{nsecState, rname, mname, nsecS}}

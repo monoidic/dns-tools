@@ -48,23 +48,18 @@ func labelDiff(start, end Nsec3Hash) *big.Int {
 	case 0: // covers whole zone
 		return nsec3Total()
 	case -1: // start < end
-		startNum := start.toNum()
-		endNum := end.toNum()
-		total = total.Sub(startNum, endNum)
+		total = total.Sub(start.toNum(), end.toNum())
 	case 1: // start > end, wraparound
-		startNum := start.toNum()
-		endNum := end.toNum()
-
-		// add up start to ffff... + 0000... to end (=> start to ffff... + end)
-		startNum = startNum.Sub(nsec3HashEnd.toNum(), startNum)
-		total = total.Add(startNum, endNum)
+		// add up start to ffff... + 0000... to end (=> ffff... - start  + end)
+		total = total.Sub(nsec3HashEnd.toNum(), start.toNum())
+		total = total.Add(total, end.toNum())
 	}
 
 	return total
 }
 
-func lableDiffSmall(start, end Nsec3Hash) bool {
-	return minDiff.Cmp(labelDiff(start, end)) != -1
+func labelDiffSmall(start, end Nsec3Hash) bool {
+	return minDiff.Cmp(labelDiff(start, end)) == -1
 }
 
 func (nh *Nsec3Hash) toNum() *big.Int {
@@ -181,6 +176,11 @@ func (wz *nsec3WalkZone) addKnown(rn rangeset.RangeEntry[Nsec3Hash], bitmap []ui
 	}
 
 	wz.knownRanges.Add(rn)
+
+	// do not add nsec3HashStart to known
+	if rn.Start == nsec3HashStart {
+		return true
+	}
 
 	var nsecTypes []string
 	for _, t := range bitmap {
@@ -491,7 +491,7 @@ func nsec3WalkResolve(connCache connCache, _ dns.Msg, zd *retryWrap[fieldData, e
 
 					start, end := nsec3RRToHashes(rrT)
 
-					if lableDiffSmall(start, end) {
+					if labelDiffSmall(start, end) {
 						return nsec3WalkZone{}, errors.New("nsec3 white lies?")
 					}
 
@@ -507,8 +507,13 @@ func nsec3WalkResolve(connCache connCache, _ dns.Msg, zd *retryWrap[fieldData, e
 		}
 
 		// got everything already
-		// fmt.Printf("%d ranges %d known names %s zone discovered\n", len(wz.knownRanges.Ranges), len(wz.rrTypes), wz.percentDiscovered())
-		// fmt.Println(wz.String())
+
+		fmt.Printf("zone=%s %d ranges %d known names %s zone discovered\n", wz.zone, len(wz.knownRanges.Ranges), len(wz.rrTypes), wz.percentDiscovered())
+
+		if len(wz.knownRanges.Ranges) < 100 {
+			fmt.Println(wz.String())
+		}
+
 		if len(wz.knownRanges.Ranges) == 1 {
 			rn := wz.knownRanges.Ranges[0]
 			if rn.Start == nsec3HashStart && rn.End == nsec3HashEnd {
