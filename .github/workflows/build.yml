@@ -36,6 +36,7 @@ jobs:
     - run: sudo mkdir rootfs/src
     - run: sudo mount -o bind . rootfs/src
     - run: sudo mount -t devtmpfs devtmpfs rootfs/dev/
+    - run: sudo mount -t proc proc rootfs/proc/
     - run: sudo cp $(which qemu-${{ matrix.arch }}-static) rootfs/
     - run: printf 'nameserver 1.1.1.1\n' | sudo tee rootfs/etc/resolv.conf
     - run: sudo chroot rootfs /qemu-${{ matrix.arch }}-static /bin/sh /src/static.sh
