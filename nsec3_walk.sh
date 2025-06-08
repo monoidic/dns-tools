@@ -6,8 +6,6 @@ db=$(mktemp --tmpdir nsec3_walk.XXXXXX.sqlite3)
 source lib.sh
 
 main() {
-	# get rid of leftovers
-	rm "${db}"* 2>/dev/null
 	init_db
 
 	# add zones
