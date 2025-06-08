@@ -286,38 +286,8 @@ func zoneIPReader(db *sql.DB) iter.Seq[zoneIP] {
 	}
 }
 
-// helper function to add parent zone NS IPs for fetching glue records from parent zones
-func nsIPAdderWorker(db *sql.DB, seq iter.Seq[fieldData]) iter.Seq[fdResults] {
-	return func(yield func(fdResults) bool) {
-		tx := check1(db.Begin())
-
-		var v4Filter string
-		if !v6 {
-			v4Filter = `AND ip.address LIKE '%.%'`
-		}
-
-		nsCache := getFDCache(fmt.Sprintf(`
-		SELECT DISTINCT ip.address || ':53', ip.id
-		FROM name AS child
-		INNER JOIN zone_ns ON zone_ns.zone_id = child.parent_id
-		INNER JOIN name_ip ON zone_ns.ns_id = name_ip.name_id
-		INNER JOIN ip ON name_ip.ip_id = ip.id
-		WHERE child.name=? %s
-	`, v4Filter), tx)
-
-		for zd := range seq {
-			if !yield(fdResults{fieldData: zd, results: nsCache.getName(zd.name)}) {
-				break
-			}
-		}
-
-		nsCache.clear()
-		check(tx.Commit())
-	}
-}
-
 // `readerF` for fetching NS glue records from parent zones
-func parentNSWriter(db *sql.DB, seq iter.Seq[fieldData]) {
+func parentNSWriter(db *sql.DB, seq iter.Seq[zoneIP]) {
 	tablesFields := map[string]string{
 		"name": "name",
 		"ip":   "address",
@@ -327,41 +297,42 @@ func parentNSWriter(db *sql.DB, seq iter.Seq[fieldData]) {
 		"insert_zone_ns": "INSERT INTO zone_ns (zone_id, ns_id, in_parent_zone) VALUES (?, ?, TRUE) ON CONFLICT DO UPDATE SET in_parent_zone=TRUE",
 		"name_to_ns":     "UPDATE name SET is_ns=TRUE WHERE id=?",
 		"registered":     "UPDATE name SET registered=TRUE, reg_checked=TRUE WHERE id=?",
-		"fetched":        "UPDATE name SET glue_ns=TRUE WHERE id=?",
+		"fetched":        "UPDATE zone_ns_ip_glue SET fetched=TRUE WHERE zone_ns_ip_glue.zone_id=? AND zone_ns_ip_glue.ip_id=?",
 	}
 
-	nsIP := nsIPAdderWorker(db, seq)
-
-	netWriter(db, nsIP, tablesFields, namesStmts, parentNSResolverWorker, parentNSWrite)
+	netWriter(db, seq, tablesFields, namesStmts, parentNSResolverWorker, parentNSWrite)
 }
 
 // `insertF` for NS glue records from parent zone
 func parentNSWrite(tableMap TableMap, stmtMap StmtMap, nsr parentNSResults) {
-	zoneID := nsr.id
+	zoneID := nsr.zone.id
+	ipID := nsr.ip.id
 
-	if len(nsr.ns) > 0 {
-		stmtMap.exec("registered", zoneID)
+	defer stmtMap.exec("fetched", zoneID, ipID)
 
-		for _, a := range nsr.a {
-			nameID := tableMap.get("name", a.Hdr.Name)
-			ipID := tableMap.get("ip", a.A.String())
-			stmtMap.exec("insert_name_ip", nameID, ipID)
-		}
-
-		for _, aaaa := range nsr.aaaa {
-			nameID := tableMap.get("name", aaaa.Hdr.Name)
-			ipID := tableMap.get("ip", aaaa.AAAA.String())
-			stmtMap.exec("insert_name_ip", nameID, ipID)
-		}
-
-		for _, ns := range nsr.ns {
-			nsID := tableMap.get("name", ns.Ns)
-			stmtMap.exec("name_to_ns", nsID)
-			stmtMap.exec("insert_zone_ns", zoneID, nsID)
-		}
+	if len(nsr.ns) == 0 {
+		return
 	}
 
-	stmtMap.exec("fetched", zoneID)
+	stmtMap.exec("registered", zoneID)
+
+	for _, a := range nsr.a {
+		nameID := tableMap.get("name", a.Hdr.Name)
+		ipID := tableMap.get("ip", a.A.String())
+		stmtMap.exec("insert_name_ip", nameID, ipID)
+	}
+
+	for _, aaaa := range nsr.aaaa {
+		nameID := tableMap.get("name", aaaa.Hdr.Name)
+		ipID := tableMap.get("ip", aaaa.AAAA.String())
+		stmtMap.exec("insert_name_ip", nameID, ipID)
+	}
+
+	for _, ns := range nsr.ns {
+		nsID := tableMap.get("name", ns.Ns)
+		stmtMap.exec("name_to_ns", nsID)
+		stmtMap.exec("insert_zone_ns", zoneID, nsID)
+	}
 }
 
 // `netWriter` wrapper for NS queries
@@ -386,23 +357,25 @@ func netNSWriter(db *sql.DB, seq iter.Seq[fieldData]) {
 func nsWrite(tableMap TableMap, stmtMap StmtMap, nsd rrResults[dns.NS]) {
 	zoneID := nsd.id
 
-	if len(nsd.results) > 0 {
-		stmtMap.exec("registered", zoneID)
-		rrTypeID := tableMap.get("rr_type", "NS")
-		rrNameID := tableMap.get("rr_name", nsd.name)
+	defer stmtMap.exec("update", zoneID)
 
-		for _, ns := range nsd.results {
-			normalizeRR(&ns)
-			nsID := tableMap.get("name", ns.Ns)
-
-			stmtMap.exec("insert", zoneID, nsID)
-
-			rrValueID := tableMap.get("rr_value", ns.String())
-			stmtMap.exec("zone2rr", zoneID, rrTypeID, rrNameID, rrValueID)
-		}
+	if len(nsd.results) == 0 {
+		return
 	}
 
-	stmtMap.exec("update", zoneID)
+	stmtMap.exec("registered", zoneID)
+	rrTypeID := tableMap.get("rr_type", "NS")
+	rrNameID := tableMap.get("rr_name", nsd.name)
+
+	for _, ns := range nsd.results {
+		normalizeRR(&ns)
+		nsID := tableMap.get("name", ns.Ns)
+
+		stmtMap.exec("insert", zoneID, nsID)
+
+		rrValueID := tableMap.get("rr_value", ns.String())
+		stmtMap.exec("zone2rr", zoneID, rrTypeID, rrNameID, rrValueID)
+	}
 }
 
 // `netWriter` wrapper for A/AAAA queries
@@ -530,7 +503,7 @@ func chaosTXTWorker(inChan <-chan retryWrap[fieldData, chaosResults], refeedChan
 }
 
 // `resolverWorker` wrapper to perform NS queries on a parent zone for glue records
-func parentNSResolverWorker(inChan <-chan retryWrap[fdResults, parentNSResults], refeedChan chan<- retryWrap[fdResults, parentNSResults], outChan chan<- parentNSResults, wg, retryWg *sync.WaitGroup) {
+func parentNSResolverWorker(inChan <-chan retryWrap[zoneIP, empty], refeedChan chan<- retryWrap[zoneIP, empty], outChan chan<- parentNSResults, wg, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode: dns.OpcodeQuery,
@@ -694,9 +667,6 @@ func addrResolve(connCache connCache, msg dns.Msg, fd *retryWrap[fieldData, addr
 // `processsData` function
 func parentCheckResolve(connCache connCache, msg dns.Msg, cpIn *retryWrap[childParent, empty]) (cp childParent, err error) {
 	cp = cpIn.val
-	if cp.resolved { // ID fetched by parentCheckFilter or invalid/nonexistant
-		return
-	}
 
 	msg.Question[0].Name = cp.parentGuess
 	var res *dns.Msg
@@ -838,49 +808,37 @@ func chaosTXTResolve(connCache connCache, msg dns.Msg, fd *retryWrap[fieldData, 
 }
 
 // `processsData` function
-func parentNsResolve(connCache connCache, msg dns.Msg, fdr *retryWrap[fdResults, parentNSResults]) (pr parentNSResults, err error) {
-	msg.Question[0].Name = dns.Fqdn(fdr.val.name)
+func parentNsResolve(connCache connCache, msg dns.Msg, fdr *retryWrap[zoneIP, empty]) (pr parentNSResults, err error) {
+	msg.Question[0].Name = dns.Fqdn(fdr.val.zone.name)
 
-	if nsLen := len(fdr.val.results); nsLen > 0 {
-		for i := fdr.stage; i < len(fdr.val.results); i++ {
-			fdr.stage = i
-			nameserver := fdr.val.results[i]
-			var response *dns.Msg
+	nameserver := net.JoinHostPort(fdr.val.ip.name, "53")
+	var response *dns.Msg
 
-			response, err = plainResolve(msg, connCache, nameserver)
-			if err != nil {
-				if fdr.retriesLeft == 0 {
-					// skip to next
-					fdr.retriesLeft = RETRIES
-					err = nil
-					continue
-				}
-				return
-			}
+	response, err = plainResolve(msg, connCache, nameserver)
+	if err != nil {
+		return
+	}
 
-			for _, rr := range response.Ns {
-				switch rrT := rr.(type) {
-				case *dns.NS:
-					normalizeRR(rrT)
-					fdr.tmp.ns = append(fdr.tmp.ns, *rrT)
-				}
-			}
-
-			for _, rr := range response.Extra {
-				switch rrT := rr.(type) {
-				case *dns.A:
-					normalizeRR(rrT)
-					fdr.tmp.a = append(fdr.tmp.a, *rrT)
-				case *dns.AAAA:
-					normalizeRR(rrT)
-					fdr.tmp.aaaa = append(fdr.tmp.aaaa, *rrT)
-				}
-			}
+	for _, rr := range response.Ns {
+		switch rrT := rr.(type) {
+		case *dns.NS:
+			normalizeRR(rrT)
+			pr.ns = append(pr.ns, *rrT)
 		}
 	}
 
-	pr = fdr.tmp
-	pr.fieldData = fdr.val.fieldData
+	for _, rr := range response.Extra {
+		switch rrT := rr.(type) {
+		case *dns.A:
+			normalizeRR(rrT)
+			pr.a = append(pr.a, *rrT)
+		case *dns.AAAA:
+			normalizeRR(rrT)
+			pr.aaaa = append(pr.aaaa, *rrT)
+		}
+	}
+
+	pr.zoneIP = fdr.val
 
 	return
 }
@@ -953,8 +911,5 @@ func parentCheckWorker(dataChan <-chan retryWrap[childParent, empty], refeedChan
 	}
 	msgSetSize(&msg)
 
-	workerInChan := make(chan retryWrap[childParent, empty], MIDBUFLEN)
-	go parentCheckFilter(dataChan, workerInChan, tableMap)
-
-	resolverWorker(workerInChan, refeedChan, outChan, msg, parentCheckResolve, wg, retryWg)
+	resolverWorker(dataChan, refeedChan, outChan, msg, parentCheckResolve, wg, retryWg)
 }

@@ -6,7 +6,6 @@ import (
 	"iter"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/miekg/dns"
 )
@@ -86,7 +85,6 @@ func axfrWorker(zipChan <-chan zoneIP, rrDataChan chan<- rrData, wg *sync.WaitGr
 
 	axfrRetryLoop:
 		for range RETRIES {
-			now := time.Now()
 			if err := performAxfr(msg, rrDataChan, ns); err == nil {
 				start := 0
 				end := len(ns) - 3 // drop :53
@@ -100,7 +98,6 @@ func axfrWorker(zipChan <-chan zoneIP, rrDataChan chan<- rrData, wg *sync.WaitGr
 					zone:    zone,
 					ip:      ip,
 					msgtype: rrDataZoneAxfrEnd,
-					scanned: now.Unix(),
 				}
 				break
 			} else {

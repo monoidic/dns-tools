@@ -76,6 +76,7 @@ var flags = map[string]*flagData{
 	"chaos":             {description: "attempt to get info on authoritative nameservers themselves", function: chaosTXT},
 	"maybe_zone":        {description: `check whether "maybe-zone" names are zones`, function: maybeZone},
 	"zone_ns_ip":        {description: "map out zone<=>ns_ip for AXFR", function: extractZoneNsIP},
+	"zone_ns_ip_glue":   {description: "map out zone<=>ns_ip for parent_ns", function: extractZoneNsIPGlue},
 }
 
 var (
@@ -84,7 +85,7 @@ var (
 		"arpa_v4", "arpa_v6",
 		"rr_ns", "rr_mx", "rr_ip", "rr_ptr",
 		"net_ns", "net_mx", "net_ip", "net_ptr",
-		"zone_ns_ip",
+		"zone_ns_ip", "zone_ns_ip_glue",
 		"check_up",
 		"nsec_map", "zone_walk", "nsec3_walk", "zone_walk_results",
 		"axfr", "psl", "validate", "parent_map", "parent_ns",

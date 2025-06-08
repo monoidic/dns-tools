@@ -3,39 +3,19 @@
 bin="~/go/bin/dns-tools"
 db="arpa_walk.sqlite3"
 
-scan() {
-	eval "$bin" -db "$db" $*
-}
-
-insert_zone() {
-	zone="$1"
-	echo "zone=$zone"
-	sqlite3 "$db" "INSERT INTO name (name, is_zone) VALUES ('${zone}', TRUE)"
-}
-
+source lib.sh
 
 main() {
-    # dummy db
-    scan -rr_ip
+    init_db
     # add zones
     insert_zone ip6.arpa.
     insert_zone in-addr.arpa.
 
-    for i in {1..5}; do
-        scan -rr_{ns,ip}
-        scan -net_{ns,ip}
-        scan -rr_{ns,ip}
-    done
+    get_ns_ips
 
     for i in {1..34}; do
         scan -v6 -direct_conns -axfr
-
-        for i in {1..5}; do
-            scan -rr_{ns,ip}
-            scan -net_{ns,ip}
-            scan -rr_{ns,ip}
-        done
-
+        get_ns_ips
     done
 }
 

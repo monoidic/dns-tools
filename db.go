@@ -44,7 +44,6 @@ type rrData struct {
 	rrType  string
 	rrName  string
 	ip      string
-	scanned int64
 
 	msgtype
 	parentZone bool
@@ -61,13 +60,6 @@ type TableMap struct {
 	data map[string]*tableData
 	mx   *sync.RWMutex
 	wg   *sync.WaitGroup
-}
-
-type FDCache struct {
-	cache   *ttlcache.Cache[string, []fieldData]
-	loader  ttlcache.Option[string, []fieldData]
-	cleanup func()
-	qs      string
 }
 
 type rrDBData struct {
@@ -92,57 +84,6 @@ func initDb(db *sql.DB) {
 	}
 
 	check(tx.Commit())
-}
-
-func getFDCLoader(qs string, tx *sql.Tx) (ttlcache.Option[string, []fieldData], func()) {
-	stmt := check1(tx.Prepare(qs))
-
-	cacheF := ttlcache.WithLoader(ttlcache.LoaderFunc[string, []fieldData](func(c *ttlcache.Cache[string, []fieldData], zone string) *ttlcache.Item[string, []fieldData] {
-		rows := check1(stmt.Query(zone))
-
-		var ret []fieldData
-
-		for rows.Next() {
-			var fd fieldData
-			check(rows.Scan(&fd.name, &fd.id))
-			ret = append(ret, fd)
-		}
-
-		return c.Set(zone, ret, 0)
-	}))
-
-	cleanup := func() {
-		check(stmt.Close())
-	}
-
-	return cacheF, cleanup
-}
-
-func getFDCache(qs string, tx *sql.Tx) *FDCache {
-	getF, cleanup := getFDCLoader(qs, tx)
-	cache := ttlcache.New(
-		ttlcache.WithTTL[string, []fieldData](1 * time.Minute),
-	)
-
-	go cache.Start()
-
-	return &FDCache{cache: cache, cleanup: cleanup, qs: qs, loader: getF}
-}
-
-func (fdc *FDCache) clear() {
-	fdc.cleanup()
-	fdc.cache.Stop()
-	fdc.cache.DeleteAll()
-}
-
-func (fdc *FDCache) getName(zone string) []string {
-	fds := fdc.cache.Get(zone, fdc.loader).Value()
-	names := make([]string, 0, len(fds))
-	for _, fd := range fds {
-		names = append(names, fd.name)
-	}
-
-	return names
 }
 
 func getTableMap(m map[string]string, tx *sql.Tx) TableMap {
@@ -484,4 +425,8 @@ func extractPTRRR(db *sql.DB) {
 
 func extractZoneNsIP(db *sql.DB) {
 	readerWriter("mapping zone to NS IP mappings", db, zoneNsIpReader(db), insertZoneNsIp)
+}
+
+func extractZoneNsIPGlue(db *sql.DB) {
+	readerWriter("mapping zone to parent NS IP mappings", db, zoneNsIpParentReader(db), insertZoneNsIpGlue)
 }

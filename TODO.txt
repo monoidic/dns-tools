@@ -1,3 +1,11 @@
+TODO wtf did I write here :)
+
+parent mapping guesses to separate table?
+
+unreg ns/mx in list/zone/arpa?
+
+something something cname improvements?
+
 split everything into
 1) fetch to zone2rr
 2) parse from zone2rr

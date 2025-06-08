@@ -65,7 +65,7 @@ type addrData struct {
 }
 
 type parentNSResults struct {
-	fieldData
+	zoneIP
 	ns   []dns.NS
 	a    []dns.A
 	aaaa []dns.AAAA
@@ -413,24 +413,6 @@ func resolverWorker[inType, resultType, tmpType any](dataChan <-chan retryWrap[i
 	}
 }
 
-// bypass resolver if direct parent is already in DB
-func parentCheckFilter(inChan <-chan retryWrap[childParent, empty], workerInChan chan<- retryWrap[childParent, empty], tableMap TableMap) {
-	tableMap.wg.Add(1)
-	for cp := range inChan {
-		if cp.val.parentGuess == "" {
-			cp.val.resolved = true
-		} else if parentID := tableMap.roGet("name", cp.val.parentGuess); parentID != 0 {
-			cp.val.resolved = true
-			cp.val.registered = true
-			cp.val.parent.name = cp.val.parentGuess
-			cp.val.parent.id = parentID
-		}
-		workerInChan <- cp
-	}
-	close(workerInChan)
-	tableMap.wg.Done()
-}
-
 // prints a message, creates a channel, reads entries of some type `inType` with a reader function
 // from the database into the channel and sends them over a channel to writerF,
 // which processes the entries and writes them back to the database
@@ -539,7 +521,7 @@ func checkUp(db *sql.DB) {
 }
 
 func getParentNS(db *sql.DB) {
-	readerWriter("getting NS records from parent zone", db, netZoneReader(db, "AND glue_ns=FALSE"), parentNSWriter)
+	readerWriter("getting NS records from parent zone", db, parentNSReader(db), parentNSWriter)
 }
 
 func rdns(db *sql.DB) {

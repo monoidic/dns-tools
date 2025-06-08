@@ -19,7 +19,7 @@ func insertRRWorker(db *sql.DB, seq iter.Seq[rrData]) {
 	namesStmts := map[string]string{
 		"insert":           "INSERT OR IGNORE INTO zone2rr (zone_id, rr_type_id, rr_name_id, rr_value_id, poison) VALUES (?, ?, ?, ?, ?)",
 		"update":           "UPDATE name SET inserted=TRUE, is_zone=TRUE WHERE id=?",
-		"vuln_ns":          "UPDATE zone_ns_ip SET axfrable=TRUE, scan_time=? WHERE ip_id=? AND zone_id=?",
+		"vuln_ns":          "UPDATE zone_ns_ip SET axfrable=TRUE WHERE ip_id=? AND zone_id=?",
 		"axfr_tried":       "UPDATE zone_ns_ip SET axfr_tried=TRUE WHERE ip_id=? AND zone_id=?",
 		"self_parent_zone": "UPDATE zone2rr SET from_self=from_self|?, from_parent=from_parent|? WHERE zone_id=? AND rr_type_id=? AND rr_name_id=? AND rr_value_id=?",
 	}
@@ -52,7 +52,7 @@ func insertRRW(tableMap TableMap, stmtMap StmtMap, rrD rrData) {
 		ipID := tableMap.get("ip", rrD.ip)
 		zoneID := tableMap.get("name", rrD.zone)
 
-		stmtMap.exec("vuln_ns", rrD.scanned, ipID, zoneID)
+		stmtMap.exec("vuln_ns", ipID, zoneID)
 		stmtMap.exec("update", zoneID)
 
 	case rrDataZoneAxfrTry:
@@ -72,7 +72,6 @@ func insertNSRR(db *sql.DB, seq iter.Seq[rrDBData]) {
 		"set_zone":        "UPDATE name SET is_zone=TRUE WHERE id=?",
 		"set_ns":          "UPDATE name SET is_ns=TRUE WHERE id=?",
 		"set_parent_self": "UPDATE zone_ns SET in_parent_zone=in_parent_zone|?, in_self_zone=in_self_zone|? WHERE zone_id=? AND ns_id=?",
-		"set_glue":        "UPDATE name SET glue_ns=TRUE WHERE id=?",
 		"set_checked":     "UPDATE name SET reg_checked=TRUE WHERE id=?",
 		"parsed":          "UPDATE zone2rr SET parsed=TRUE WHERE id=?",
 	}
@@ -96,7 +95,6 @@ func nsRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
 
 		if ad.fromParent {
 			parentID := tableMap.get("name", nsRR.Hdr.Name)
-			stmtMap.exec("set_glue", zoneID)
 			stmtMap.exec("set_checked", parentID)
 		}
 	}
@@ -207,6 +205,14 @@ func insertZoneNsIp(db *sql.DB, seq iter.Seq[zoneIP]) {
 	tablesFields := map[string]string{}
 	namesStmts := map[string]string{
 		"zone_ns_ip": "INSERT OR IGNORE INTO zone_ns_ip (zone_id, ip_id) VALUES(?, ?)",
+	}
+	insertRR(db, seq, tablesFields, namesStmts, zoneNsIpRRF)
+}
+
+func insertZoneNsIpGlue(db *sql.DB, seq iter.Seq[zoneIP]) {
+	tablesFields := map[string]string{}
+	namesStmts := map[string]string{
+		"zone_ns_ip": "INSERT OR IGNORE INTO zone_ns_ip_glue (zone_id, ip_id) VALUES(?, ?)",
 	}
 	insertRR(db, seq, tablesFields, namesStmts, zoneNsIpRRF)
 }

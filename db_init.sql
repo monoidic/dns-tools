@@ -15,7 +15,6 @@ CREATE TABLE IF NOT EXISTS name
     nsec_walked     INTEGER NOT NULL DEFAULT FALSE,
     mx_resolved     INTEGER NOT NULL DEFAULT FALSE,
     ns_resolved     INTEGER NOT NULL DEFAULT FALSE,
-    glue_ns         INTEGER NOT NULL DEFAULT FALSE, -- for zones. glue NS has been fetched from parent zone
     addr_resolved   INTEGER NOT NULL DEFAULT FALSE,
     spf_tried       INTEGER NOT NULL DEFAULT FALSE,
     dmarc_tried     INTEGER NOT NULL DEFAULT FALSE, -- so that '_dmarc.${name}' does not need to be stored
@@ -74,13 +73,22 @@ CREATE TABLE IF NOT EXISTS name_ip
     UNIQUE(name_id, ip_id)
 );
 
-CREATE TABLE IF NOT EXISTS zone_ns_ip (
+CREATE TABLE IF NOT EXISTS zone_ns_ip
+(
     id          INTEGER PRIMARY KEY,
     zone_id     INTEGER NOT NULL REFERENCES name(id), -- zone, e.g example.com.
     ip_id       INTEGER NOT NULL REFERENCES ip(id),   -- ns ip, e.g 1.2.3.4 for ns1.example.com
     axfr_tried  INTEGER NOT NULL DEFAULT FALSE,
     axfrable    INTEGER NOT NULL DEFAULT FALSE,
-    scan_time   INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(zone_id, ip_id)
+);
+
+CREATE TABLE IF NOT EXISTS zone_ns_ip_glue
+(
+    id          INTEGER PRIMARY KEY,
+    zone_id     INTEGER NOT NULL REFERENCES name(id), -- zone, e.g example.com.
+    ip_id       INTEGER NOT NULL REFERENCES ip(id),   -- ns ip, e.g 1.2.3.4 for c.gtld-servers.net (ns for com.)
+    fetched     INTEGER NOT NULL DEFAULT FALSE,
     UNIQUE(zone_id, ip_id)
 );
 
@@ -237,7 +245,8 @@ CREATE TABLE IF NOT EXISTS chaos_response
     UNIQUE(chaos_query_id, chaos_response_value_id)
 );
 
-CREATE TABLE IF NOT EXISTS nsec3_zone_params (
+CREATE TABLE IF NOT EXISTS nsec3_zone_params
+(
     id INTEGER PRIMARY KEY,
     zone_id     INTEGER NOT NULL REFERENCES name(id),
     salt        TEXT NOT NULL,

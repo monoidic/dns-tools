@@ -1,30 +1,29 @@
 #!/usr/bin/env bash
 
-bin="~/go/bin/dns-tools"
-#db="/tmp/testx.sqlite3"
-db=$(mktemp /tmp/testx.XXXXXX.sqlite3)
+bin="~/src/dns-tools/dns-tools"
+db=$(mktemp --tmpdir nsec3_walk.XXXXXX.sqlite3)
 
-scan() {
-	eval "$bin" -db "$db" $*
-}
-
-insert_zone() {
-	zone="$1"
-	echo "zone=$zone"
-	sqlite3 "$db" "INSERT INTO name (name, is_zone) VALUES ('${zone}', TRUE)"
-	sqlite3 "$db" "INSERT INTO zone_nsec_state (zone_id, nsec_state_id, rname_id, mname_id, nsec) VALUES ((SELECT id FROM name WHERE name.name='${zone}'), 4, 0, 0, '')"
-}
+source lib.sh
 
 main() {
-	# create dummy db
-	scan -rr_ip
+	# get rid of leftovers
+	rm "${db}"* 2>/dev/null
+	init_db
 
 	# add zones
 	for zone in $*; do
 		insert_zone $zone
 	done
+	# detect nsec3
+	scan -nsec_map
 	# walk
 	scan -nsec3_walk
+
+	hashcat_format
+
+	rr_info
+
+	rm "${db}"*
 }
 
 hashcat_format() {
@@ -39,6 +38,8 @@ hashcat_format() {
 	done
 }
 
-rm ${db}* 2>/dev/null
+rr_info() {
+	sqlite3 "$db" 'SELECT nsec3_hashes.nsec3_hash, rr_type.name FROM nsec3_hash_rr_map INNER JOIN nsec3_hashes ON nsec3_hash_rr_map.nsec3_hash_id=nsec3_hashes.id INNER JOIN rr_type ON nsec3_hash_rr_map.rr_type_id=rr_type.id ORDER BY nsec3_hashes.nsec3_hash' | tr '|' '\t'
+}
+
 main $*
-hashcat_format
