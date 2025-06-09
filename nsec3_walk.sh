@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-bin="~/src/dns-tools/dns-tools"
+bin="~/go/bin/dns-tools"
 db=$(mktemp --tmpdir nsec3_walk.XXXXXX.sqlite3)
 
 source lib.sh
@@ -37,7 +37,12 @@ hashcat_format() {
 }
 
 rr_info() {
-	sqlite3 "$db" 'SELECT nsec3_hashes.nsec3_hash, rr_type.name FROM nsec3_hash_rr_map INNER JOIN nsec3_hashes ON nsec3_hash_rr_map.nsec3_hash_id=nsec3_hashes.id INNER JOIN rr_type ON nsec3_hash_rr_map.rr_type_id=rr_type.id ORDER BY nsec3_hashes.nsec3_hash' | tr '|' '\t'
+	sqlite3 "$db" 'SELECT nsec3_hash FROM nsec3_hashes ORDER BY nsec3_hash' | while read nsec3_hash; do
+		printf '%s: ' "$nsec3_hash"
+		sqlite3 "$db" "SELECT rr_type.name FROM nsec3_hash_rr_map INNER JOIN nsec3_hashes ON nsec3_hash_rr_map.nsec3_hash_id=nsec3_hashes.id INNER JOIN rr_type ON nsec3_hash_rr_map.rr_type_id=rr_type.id WHERE nsec3_hashes.nsec3_hash='${nsec3_hash}' ORDER BY rr_type.name" | tr '\n' ' '
+		echo
+	done
+
 }
 
 main $*
