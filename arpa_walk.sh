@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 
-bin="~/go/bin/dns-tools"
 db="arpa_walk.sqlite3"
 
 source lib.sh

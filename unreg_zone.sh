@@ -2,7 +2,6 @@
 
 zone="$1"
 
-bin="./dns-tools"
 db=$(mktemp --tmpdir unreg_zone.XXXXXX.sqlite3)
 
 source lib.sh

@@ -4,9 +4,9 @@
 
 scan() {
     if [[ $verbose == 1 ]]; then
-	    eval "$bin" -db "$db" $*
+	    ~/go/bin/dns-tools -db "$db" $*
     else
-        eval "$bin" -db "$db" $* > /dev/null
+        ~/go/bin/dns-tools -db "$db" $* > /dev/null
     fi
 }
 

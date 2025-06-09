@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 
-bin="~/go/bin/dns-tools"
 db=$(mktemp --tmpdir nsec_walk.XXXXXX.sqlite3)
 
 source lib.sh

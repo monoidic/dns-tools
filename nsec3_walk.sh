@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 
-bin="~/go/bin/dns-tools"
 db=$(mktemp --tmpdir nsec3_walk.XXXXXX.sqlite3)
 
 source lib.sh
@@ -8,7 +7,6 @@ source lib.sh
 main() {
 	init_db
 
-	# add zones
 	for zone in $*; do
 		insert_zone $zone
 	done

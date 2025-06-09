@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 
 
-bin="./dns-tools"
 db=$(mktemp --tmpdir unreg_list.XXXXXX.sqlite3)
 
 source lib.sh

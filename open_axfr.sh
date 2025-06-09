@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
 
-bin="~/src/dns-tools/dns-tools"
 db=$(mktemp --tmpdir open_axfr.XXXXXX.sqlite3)
-
-zone="$1"
 
 source lib.sh
 
 main() {
     init_db
 
-    insert_zone "$zone"
+    for zone in $*; do
+        insert_zone "$zone"
+    done
 
     get_ns_ips
 
@@ -21,4 +20,4 @@ main() {
     rm "$db"*
 }
 
-main
+main $*
