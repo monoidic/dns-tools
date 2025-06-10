@@ -9,24 +9,26 @@ from bs4 import BeautifulSoup
 
 from typing import TextIO
 
+
 def fetch(outfile: TextIO) -> None:
-    res = requests.get('https://www.afnic.fr/en/products-and-services/fr-and-associated-services/shared-data-reuse-fr-data/')
-    page = res.text
-
-    parsed = BeautifulSoup(page, features='lxml')
-
-    zip_url = parsed.find_all('h3')[0].find_parent().find_parent().attrs['href']
-
+    url = "https://www.afnic.fr/en/products-and-services/fr-and-associated-services/shared-data-reuse-fr-data/"
+    res = requests.get(url)
+    parsed = BeautifulSoup(res.text, features="lxml")
+    zip_url = parsed.select(".DocumentsOpenData a[href]")[0].attrs["href"]
     res = requests.get(zip_url)
     zip_data = res.content
 
     with BytesIO(zip_data) as zip_file:
         zip_reader = zipfile.ZipFile(zip_file)
-        with StringIO(zip_reader.read(zip_reader.namelist()[0]).decode('iso8859_2')) as s:
-            csv_reader = csv.DictReader(s, delimiter=';')
-            for domain in (e['Nom de domaine'] for e in csv_reader):
-                outfile.write(f'{domain}\n')
+        filename = zip_reader.namelist()[0]
+        data = zip_reader.read(filename).decode()
+        with StringIO(data) as s:
+            for line in csv.DictReader(s, delimiter=";"):
+                domain = line["Nom de domaine"].encode("idna").decode()
+                outfile.write(f"{domain}\n")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     import sys
+
     fetch(sys.stdout)

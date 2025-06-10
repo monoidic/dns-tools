@@ -81,18 +81,12 @@ func axfrWorker(zipChan <-chan zoneIP, rrDataChan chan<- rrData, wg *sync.WaitGr
 	for zip := range zipChan {
 		zone := zip.zone.name
 		ns := zip.ip.name
+		ip := extractIP(ns)
 		msg.Question[0].Name = zone
 
 	axfrRetryLoop:
 		for range RETRIES {
 			if err := performAxfr(msg, rrDataChan, ns); err == nil {
-				start := 0
-				end := len(ns) - 3 // drop :53
-				if ns[0] == '[' {  // drop []
-					start++
-					end--
-				}
-				ip := ns[start:end]
 				// timeScanned := now.UTC().Format("2006/01/02 15:04")
 				rrDataChan <- rrData{
 					zone:    zone,
@@ -112,9 +106,20 @@ func axfrWorker(zipChan <-chan zoneIP, rrDataChan chan<- rrData, wg *sync.WaitGr
 
 		rrDataChan <- rrData{
 			zone:    zone,
+			ip:      ip,
 			msgtype: rrDataZoneAxfrTry,
 		}
 	}
+}
+
+func extractIP(ns string) string {
+	start := 0
+	end := len(ns) - 3 // drop :53
+	if ns[0] == '[' {  // drop [] for ipv6
+		start++
+		end--
+	}
+	return ns[start:end]
 }
 
 func publicAxfrMaster(db *sql.DB, seq iter.Seq[zoneIP]) {
