@@ -16,6 +16,11 @@ const (
 	hasNsec3
 )
 
+func shortZone(rrT *dns.NSEC3) bool {
+	start, end := nsec3RRToHashes(rrT)
+	return start == end
+}
+
 func getNsecState(nsecSigs []dns.NSEC, nsec3Sigs []dns.NSEC3) (string, string) {
 	var nsecT uint
 	var nsecS string
@@ -51,9 +56,10 @@ func getNsecState(nsecSigs []dns.NSEC, nsec3Sigs []dns.NSEC3) (string, string) {
 
 	case hasNsec3:
 		nsecType := "nsec3"
+		shortZone := len(nsec3Sigs) == 1 && shortZone(&nsec3Sigs[0])
 		for _, rrT := range nsec3Sigs {
 			start, end := nsec3RRToHashes(&rrT)
-			if labelDiffSmall(start, end) {
+			if !shortZone && labelDiffSmall(start, end) {
 				nsecType = "secure_nsec3"
 			}
 			nsecSArr = append(nsecSArr, fmt.Sprintf("%s^%s", start, end))

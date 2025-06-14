@@ -1,6 +1,17 @@
+new NSEC walk strategy doesn't capture all names, e.g doesn't capture between `foo.xx.` and `*.foo.xx.`, probably other weirdness like `# comment.foo.xx.` either
+fall back to a method for these once normal-looking results are exhausted
+
+use github.com/mawngo/go-maplock for NSEC walks?
+handle // TODO could run up against the limit of 255 bytes per name
+
 TODO wtf did I write here :)
 
 parent mapping guesses to separate table?
+mebbe
+three separate parts:
+1) writes all guesses to a temporary uniq table
+2) find instances of the parent already existing (is a zone? easy; not a zone, but has parent? uh, okay; otherwise, idk, leave as is)
+3) resolve remaining with dns (+ cleanup)
 
 unreg ns/mx in list/zone/arpa?
 

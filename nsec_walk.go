@@ -130,7 +130,7 @@ func nsecWalkResolve(_ connCache, _ dns.Msg, zd *retryWrap[fieldData, empty]) (w
 
 		go func() {
 			defer wg.Done()
-			for _, rn := range collect(wz.unknownRanges) {
+			for _, rn := range slices.Collect(wz.unknownRanges) {
 				for middle := range getMiddle(wz.zone, rn) {
 					wg.Add(1)
 					workerInChan <- middle
@@ -175,7 +175,7 @@ func nsecWalkResolve(_ connCache, _ dns.Msg, zd *retryWrap[fieldData, empty]) (w
 		}
 
 		if !expanded {
-			skippedRanges := collect(wz.unknownRanges)
+			skippedRanges := slices.Collect(wz.unknownRanges)
 			if len(skippedRanges) > 0 {
 				fmt.Printf("skipped ranges: %#v\n", skippedRanges)
 			}

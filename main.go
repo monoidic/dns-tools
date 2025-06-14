@@ -24,6 +24,7 @@ var (
 	tcpOnly      bool
 	v6           bool
 	tldZone      bool
+	noCL         bool
 	networksFile string
 	netCC        string
 	numProcs     int
@@ -112,6 +113,7 @@ func main() {
 	flag.BoolVar(&v6, "v6", false, "allow implicit v6 connections (e.g AXFR)")
 	flag.BoolVar(&allowDirectConns, "direct_conns", false, "allow direct connections to servers besides the configured nameservers")
 	flag.BoolVar(&tldZone, "tld_zone", false, "treat parsed zone files as up-to-date zone file from TLD")
+	flag.BoolVar(&noCL, "nocl", false, "use fallback non-OpenCL implementation for NSEC3 walking")
 	flag.IntVar(&numProcs, "num_procs", runtime.GOMAXPROCS(0), "number of parallel threads to use for a variety of tasks")
 
 	flag.Parse()

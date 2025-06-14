@@ -232,56 +232,118 @@ func randomLabel() []byte {
 	return ret
 }
 
-func genHashes(zone, salt []byte, iterations int) iter.Seq[hashEntry] {
-	return func(yield func(hashEntry) bool) {
+func randomLabels(yield func([]byte) bool) {
+	for {
+		label := randomLabel()
+
+		// pick random different positions in label to permute for batch (aside from length indicator)
+		var w, x, y, z int
+		w = rand.IntN(len(label)-1) + 1
+		x = rand.IntN(len(label)-1) + 1
+		y = rand.IntN(len(label)-1) + 1
+		z = rand.IntN(len(label)-1) + 1
+
 		for {
-			label := randomLabel()
-
-			// pick two random different positions in label to permute for batch (aside from length indicator)
-			var w, x, y, z int
-			w = rand.IntN(len(label)-1) + 1
-			x = rand.IntN(len(label)-1) + 1
-			y = rand.IntN(len(label)-1) + 1
-			z = rand.IntN(len(label)-1) + 1
-
-			for {
-				if w == x || w == y || w == z {
-					w = rand.IntN(len(label)-1) + 1
-					continue
-				}
-				if x == y || x == z {
-					x = rand.IntN(len(label)-1) + 1
-					continue
-				}
-				if y == z {
-					y = rand.IntN(len(label)-1) + 1
-					continue
-				}
-				break
+			if w == x || w == y || w == z {
+				w = rand.IntN(len(label)-1) + 1
+				continue
 			}
+			if x == y || x == z {
+				x = rand.IntN(len(label)-1) + 1
+				continue
+			}
+			if y == z {
+				y = rand.IntN(len(label)-1) + 1
+				continue
+			}
+			break
+		}
 
-			// 36⁴ (1 679 616) entries per batch
+		// 36⁴ (1 679 616) entries per batch
 
-			for i := range len(nsec3walkcharset) {
-				label[w] = nsec3walkcharset[i]
-				for j := range len(nsec3walkcharset) {
-					label[x] = nsec3walkcharset[j]
-					for k := range len(nsec3walkcharset) {
-						label[y] = nsec3walkcharset[k]
-						for l := range len(nsec3walkcharset) {
-							label[z] = nsec3walkcharset[l]
+		for i := range len(nsec3walkcharset) {
+			label[w] = nsec3walkcharset[i]
+			for j := range len(nsec3walkcharset) {
+				label[x] = nsec3walkcharset[j]
+				for k := range len(nsec3walkcharset) {
+					label[y] = nsec3walkcharset[k]
+					for l := range len(nsec3walkcharset) {
+						label[z] = nsec3walkcharset[l]
 
-							hash := nsec3Hash(label, zone, salt, iterations)
-							if !yield(hashEntry{
-								hash:  hash,
-								label: slices.Clone(label[1:]),
-							}) {
-								return
-							}
-
+						if !yield(label) {
+							return
 						}
 					}
 				}
+			}
+		}
+	}
+}
+
+func genHashes(zone, salt []byte, iterations int) iter.Seq[hashEntry] {
+	return func(yield func(hashEntry) bool) {
+		for label := range randomLabels {
+			hash := nsec3Hash(label, zone, salt, iterations)
+			if !yield(hashEntry{
+				hash:  hash,
+				label: slices.Clone(label[1:]),
+			}) {
+				return
+			}
+		}
+	}
+}
+
+func genHashesMulti(zone, salt []byte, iterations int) (ch <-chan hashEntry, cancel func()) {
+	out := make(chan hashEntry, MIDBUFLEN)
+	var wg sync.WaitGroup
+
+	doneCh := make(chan empty)
+
+	cancel = func() {
+		close(doneCh)
+		wg.Wait()
+		close(out)
+	}
+
+	wg.Add(numProcs)
+
+	for range numProcs {
+		go func() {
+			for {
+				for e := range genHashes(zone, salt, iterations) {
+					select {
+					case <-doneCh:
+						wg.Done()
+						return
+					case out <- e:
+					}
+				}
+			}
+		}()
+	}
+
+	return out, cancel
+}
+
+const MULTITHREAD_NSEC3_THRESHOLD = 2
+
+// chooses single-threaded or multi-threaded genHashes variant based on iteration number
+func genHashesWrap(zone, salt []byte, iterations int) iter.Seq[hashEntry] {
+	if !noCL {
+		return nsec3HashOpenCLIter(zone, salt, iterations)
+	}
+
+	if iterations < MULTITHREAD_NSEC3_THRESHOLD {
+		return genHashes(zone, salt, iterations)
+	}
+
+	return func(yield func(hashEntry) bool) {
+		ch, cancel := genHashesMulti(zone, salt, iterations)
+		defer cancel()
+		for e := range ch {
+			if !yield(e) {
+				return
 			}
 		}
 	}
@@ -331,7 +393,6 @@ func nsec3ParamQuery(connCache connCache, zone string) *dns.NSEC3PARAM {
 	}
 
 	return nil
-
 }
 
 func nsec3Query(connCache connCache, name string) *dns.Msg {
@@ -412,9 +473,8 @@ func nsec3Compare(v1, v2 Nsec3Hash) int {
 }
 
 const (
-	NSEC3_WALK_LIMIT      = 1 << 34
-	UNEXPANDED_RUNS_LIMIT = 3
-	MIN_DIFF              = 1024
+	NSEC3_WALK_LIMIT = 1 << 34
+	MIN_DIFF         = 1024
 )
 
 var minDiff = big.NewInt(MIN_DIFF)
@@ -429,8 +489,6 @@ func nsec3WalkResolve(connCache connCache, _ dns.Msg, zd *retryWrap[fieldData, e
 
 	// fmt.Printf("starting walk on zone %s\n", zone)
 
-	limit := big.NewInt(NSEC3_WALK_LIMIT)
-
 	nsec3Param := nsec3ParamQuery(connCache, wz.zone)
 	if nsec3Param == nil {
 		return nsec3WalkZone{}, errors.New("unable to fetch NSEC3PARAM")
@@ -440,7 +498,6 @@ func nsec3WalkResolve(connCache connCache, _ dns.Msg, zd *retryWrap[fieldData, e
 	wz.iterations = int(nsec3Param.Iterations)
 
 	var expanded bool
-	var unexpanded_runs int
 
 	zoneB := []byte(wz.zone)
 
@@ -448,12 +505,13 @@ func nsec3WalkResolve(connCache connCache, _ dns.Msg, zd *retryWrap[fieldData, e
 	off := check1(dns.PackDomainName(wz.zone, encodedZone, 0, nil, false))
 	encodedZone = encodedZone[:off]
 
+outerLoop:
 	for {
 		expanded = false
 		i := NSEC3_WALK_LIMIT
 
 	hashLoop:
-		for guess := range genHashes(encodedZone, wz.salt, wz.iterations) {
+		for guess := range genHashesWrap(encodedZone, wz.salt, wz.iterations) {
 			i--
 			if i == 0 {
 				break
@@ -480,6 +538,8 @@ func nsec3WalkResolve(connCache connCache, _ dns.Msg, zd *retryWrap[fieldData, e
 				}
 			}
 
+			var sawThis bool
+
 			for _, rr := range res.Ns {
 				switch rrT := rr.(type) {
 				case *dns.NSEC3:
@@ -487,6 +547,10 @@ func nsec3WalkResolve(connCache connCache, _ dns.Msg, zd *retryWrap[fieldData, e
 					if !(rrT.Salt == nsec3Param.Salt && rrT.Iterations == nsec3Param.Iterations) {
 						// params changed in the middle of the walk
 						return nsec3WalkZone{}, errors.New("nsec3 params changed")
+					}
+
+					if rrT.Cover(hashName) {
+						sawThis = true
 					}
 
 					start, end := nsec3RRToHashes(rrT)
@@ -501,40 +565,29 @@ func nsec3WalkResolve(connCache connCache, _ dns.Msg, zd *retryWrap[fieldData, e
 				}
 			}
 
-			if expanded {
-				break
+			if !sawThis {
+				fmt.Printf("expected to see something covering hashName=%s hash=%s did not\n", hashName, guess.hash)
+				for _, rr := range res.Ns {
+					fmt.Println(rr)
+				}
 			}
-		}
 
-		// got everything already
-
-		fmt.Printf("zone=%s %d ranges %d known names %s zone discovered\n", wz.zone, len(wz.knownRanges.Ranges), len(wz.rrTypes), wz.percentDiscovered())
-
-		if len(wz.knownRanges.Ranges) < 100 {
-			fmt.Println(wz.String())
-		}
-
-		if len(wz.knownRanges.Ranges) == 1 {
-			rn := wz.knownRanges.Ranges[0]
-			if rn.Start == nsec3HashStart && rn.End == nsec3HashEnd {
-				break
+			if !expanded {
+				continue
 			}
-		}
+			fmt.Printf("zone=%s %d ranges %d known names %s zone discovered\n", wz.zone, len(wz.knownRanges.Ranges), len(wz.rrTypes), wz.percentDiscovered())
 
-		if expanded {
-			unexpanded_runs = 0
-			continue
-		}
+			if len(wz.knownRanges.Ranges) < 100 {
+				fmt.Println(wz.String())
+			}
 
-		// quit out early if chance of expanding is unreasonably small
-		size := wz.sizeUnKnown()
-		if limit.Cmp(size) == 1 {
-			break
-		}
+			if len(wz.knownRanges.Ranges) == 1 {
+				rn := wz.knownRanges.Ranges[0]
+				if rn.Start == nsec3HashStart && rn.End == nsec3HashEnd {
+					break outerLoop
+				}
+			}
 
-		unexpanded_runs++
-		if unexpanded_runs == UNEXPANDED_RUNS_LIMIT {
-			break
 		}
 	}
 

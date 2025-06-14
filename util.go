@@ -260,14 +260,6 @@ type retryWrap[inType, tmpType any] struct {
 
 type empty struct{}
 
-func collect[T any](seq iter.Seq[T]) []T {
-	var ret []T
-	for e := range seq {
-		ret = append(ret, e)
-	}
-	return ret
-}
-
 func chanToSeq[T any](ch <-chan T) iter.Seq[T] {
 	return func(yield func(T) bool) {
 		for e := range ch {

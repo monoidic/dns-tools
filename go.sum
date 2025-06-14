@@ -1,3 +1,5 @@
+github.com/CyberChainXyz/go-opencl v0.0.0-20241229131621-216260c11a44 h1:M6pl2+obPz3x+8o8Ks4j75+5Dcv+iLnyKw7tQtKwZNA=
+github.com/CyberChainXyz/go-opencl v0.0.0-20241229131621-216260c11a44/go.mod h1:BJYH3zDxxh9eJk3mSAT/XUB9tnhfOBsLDxLYSK7T6Jk=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/google/go-cmp v0.6.0 h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=
