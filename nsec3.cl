@@ -354,11 +354,19 @@ __kernel void nsec3_main(__global const nsec3_inbuf *inbuffer,
   SHA1Update(&ctx, saltbuf, saltlen);
   SHA1Final(hashbuf, &ctx);
 
-  while (iterations--) {
-    SHA1Init(&ctx);
-    SHA1Update(&ctx, hashbuf, hashlen);
-    SHA1Update(&ctx, saltbuf, saltlen);
-    SHA1Final(hashbuf, &ctx);
+  if (saltlen) {
+    while (iterations--) {
+      SHA1Init(&ctx);
+      SHA1Update(&ctx, hashbuf, hashlen);
+      SHA1Update(&ctx, saltbuf, saltlen);
+      SHA1Final(hashbuf, &ctx);
+    }
+  } else {
+    while (iterations--) {
+      SHA1Init(&ctx);
+      SHA1Update(&ctx, hashbuf, hashlen);
+      SHA1Final(hashbuf, &ctx);
+    }
   }
 
   memcpy_priv_to_glbl(outbuffer[idx].hash, hashbuf, hashlen);
