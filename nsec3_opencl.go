@@ -1,3 +1,5 @@
+//go:build opencl
+
 package main
 
 import (
@@ -8,6 +10,8 @@ import (
 
 	cl "github.com/CyberChainXyz/go-opencl"
 )
+
+const hasOpenCL = true
 
 //go:embed nsec3.cl
 var sha1_cl string
