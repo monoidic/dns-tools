@@ -17,9 +17,10 @@ void memset(void *ptr_x, uchar c, int n) {
 }
 
 #define def_memcpy(ident, out_region, in_region)                               \
-  void memcpy_##ident(out_region void *dest_x, in_region void *src_x, int n) { \
+  void memcpy_##ident(out_region void *dest_x, in_region const void *src_x,    \
+                      int n) {                                                 \
     out_region char *dest = (out_region char *)dest_x;                         \
-    in_region char *src = (in_region char *)src_x;                             \
+    in_region const char *src = (in_region const char *)src_x;                 \
     for (int i = 0; i < n; i++) {                                              \
       dest[i] = src[i];                                                        \
     }                                                                          \
@@ -29,36 +30,39 @@ def_memcpy(glbl, __global, __global) def_memcpy(priv, __private, __private)
     def_memcpy(glbl_to_priv, __private, __global)
         def_memcpy(priv_to_glbl, __global, __private)
 
-            typedef struct { // 514 bytes
-  uchar name_len;
-  uchar salt_len;
+            typedef struct { // 582 bytes
   ushort iterations;
-  uchar name_buf[255];
-  uchar salt_buf[255];
+  uchar label_len;
+  uchar zone_len;
+  uchar salt_len;
+  char zone_buf[255];
+  char label_buf[63];
+  char salt_buf[255];
+  uchar indexes[4];
 } nsec3_inbuf;
 
-typedef struct { // 276 bytes
-  uchar name_len;
+typedef struct { // 83 bytes
   uchar hash[20];
-  uchar name_buf[255];
+  uchar name_buf[63];
 } nsec3_outbuf;
 //////////////////////////////// END ME
 
 typedef struct {
   uint32_t state[5];
   uint32_t count[2];
-  unsigned char buffer[64];
+  char buffer[64];
 } SHA1_CTX;
 
-void SHA1Transform(uint32_t state[5], const unsigned char buffer[64]);
+void SHA1Transform(__private uint32_t *state, __private const char *buffer);
 
-void SHA1Init(SHA1_CTX *context);
+void SHA1Init(__private SHA1_CTX *context);
 
-void SHA1Update(SHA1_CTX *context, const unsigned char *data, uint32_t len);
+void SHA1Update(__private SHA1_CTX *context, __private const char *data,
+                uint32_t len);
 
-void SHA1Final(unsigned char digest[20], SHA1_CTX *context);
+void SHA1Final(__private char *digest, __private SHA1_CTX *context);
 
-void SHA1(char *hash_out, const char *str, uint32_t len);
+void SHA1(__private char *hash_out, __private const char *str, uint32_t len);
 
 /*
 SHA-1 in C
@@ -117,11 +121,11 @@ A million repetitions of "a"
 
 /* Hash a single 512-bit block. This is the core of the algorithm. */
 
-void SHA1Transform(uint32_t state[5], const unsigned char buffer[64]) {
+void SHA1Transform(__private uint32_t *state, __private const char *buffer) {
   uint32_t a, b, c, d, e;
 
   typedef union {
-    unsigned char c[64];
+    char c[64];
     uint32_t l[16];
   } CHAR64LONG16;
 
@@ -135,7 +139,7 @@ void SHA1Transform(uint32_t state[5], const unsigned char buffer[64]) {
    * And the result is written through.  I threw a "const" in, hoping
    * this will cause a diagnostic.
    */
-  CHAR64LONG16 *block = (const CHAR64LONG16 *)buffer;
+  CHAR64LONG16 *block = (CHAR64LONG16 *)buffer;
 #endif
   /* Copy context->state[] to working vars */
   a = state[0];
@@ -239,7 +243,7 @@ void SHA1Transform(uint32_t state[5], const unsigned char buffer[64]) {
 
 /* SHA1Init - Initialize new context */
 
-void SHA1Init(SHA1_CTX *context) {
+void SHA1Init(__private SHA1_CTX *context) {
   /* SHA1 initialization constants */
   context->state[0] = 0x67452301;
   context->state[1] = 0xEFCDAB89;
@@ -251,7 +255,8 @@ void SHA1Init(SHA1_CTX *context) {
 
 /* Run your data through this. */
 
-void SHA1Update(SHA1_CTX *context, const unsigned char *data, uint32_t len) {
+void SHA1Update(__private SHA1_CTX *context, __private const char *data,
+                uint32_t len) {
   uint32_t i;
 
   uint32_t j;
@@ -275,12 +280,12 @@ void SHA1Update(SHA1_CTX *context, const unsigned char *data, uint32_t len) {
 
 /* Add padding and return the message digest. */
 
-void SHA1Final(unsigned char digest[20], SHA1_CTX *context) {
+void SHA1Final(__private char *digest, __private SHA1_CTX *context) {
   unsigned i;
 
-  unsigned char finalcount[8];
+  char finalcount[8];
 
-  unsigned char c;
+  char c;
 
 #if 0 /* untested "improvement" by DHR */
     /* Convert context->count to a sequence of bytes
@@ -288,7 +293,7 @@ void SHA1Final(unsigned char digest[20], SHA1_CTX *context) {
      * big-endian order within element.
      * But we do it all backwards.
      */
-    unsigned char *fcp = &finalcount[8];
+    char *fcp = &finalcount[8];
 
     for (i = 0; i < 2; i++)
     {
@@ -297,12 +302,12 @@ void SHA1Final(unsigned char digest[20], SHA1_CTX *context) {
         int j;
 
         for (j = 0; j < 4; t >>= 8, j++)
-            *--fcp = (unsigned char) t}
+            *--fcp = (char) t}
 #else
   for (i = 0; i < 8; i++) {
-    finalcount[i] = (unsigned char)((context->count[(i >= 4 ? 0 : 1)] >>
-                                     ((3 - (i & 3)) * 8)) &
-                                    255); /* Endian independent */
+    finalcount[i] =
+        (char)((context->count[(i >= 4 ? 0 : 1)] >> ((3 - (i & 3)) * 8)) &
+               255); /* Endian independent */
   }
 #endif
   c = 0200;
@@ -313,41 +318,63 @@ void SHA1Final(unsigned char digest[20], SHA1_CTX *context) {
   }
   SHA1Update(context, finalcount, 8); /* Should cause a SHA1Transform() */
   for (i = 0; i < 20; i++) {
-    digest[i] =
-        (unsigned char)((context->state[i >> 2] >> ((3 - (i & 3)) * 8)) & 255);
+    digest[i] = (char)((context->state[i >> 2] >> ((3 - (i & 3)) * 8)) & 255);
   }
   /* Wipe variables */
   memset(context, '\0', sizeof(*context));
   memset(&finalcount, '\0', sizeof(finalcount));
 }
 
-void SHA1(char *hash_out, const char *str, uint32_t len) {
+void SHA1(__private char *hash_out, __private const char *str, uint32_t len) {
   SHA1_CTX ctx;
   unsigned int ii;
 
   SHA1Init(&ctx);
   for (ii = 0; ii < len; ii += 1)
-    SHA1Update(&ctx, (const unsigned char *)str + ii, 1);
-  SHA1Final((unsigned char *)hash_out, &ctx);
+    SHA1Update(&ctx, (const char *)str + ii, 1);
+  SHA1Final((char *)hash_out, &ctx);
 }
+
+__constant uchar nsec3walkcharset[36] = {
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b',
+    'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n',
+    'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z'};
 
 __kernel void nsec3_main(__global const nsec3_inbuf *inbuffer,
                          __global nsec3_outbuf *outbuffer) {
   SHA1_CTX ctx;
   char namebuf[255], saltbuf[255], hashbuf[20];
-  uchar namelen, saltlen;
+  uchar zonelen, labellen, saltlen, namelen;
   ushort iterations;
+  uchar w, x, y, z;
+  uint id, idx;
 
   const uchar hashlen = 20;
 
-  unsigned int idx = get_global_id(0);
+  iterations = inbuffer->iterations;
+  zonelen = inbuffer->zone_len;
+  labellen = inbuffer->label_len;
+  saltlen = inbuffer->salt_len;
+  namelen = 1 + labellen + zonelen;
 
-  namelen = inbuffer[idx].name_len;
-  saltlen = inbuffer[idx].salt_len;
-  iterations = inbuffer[idx].iterations;
+  namebuf[0] = labellen;
+  memcpy_glbl_to_priv(namebuf + 1, inbuffer->label_buf, labellen);
+  memcpy_glbl_to_priv(namebuf + 1 + labellen, inbuffer->zone_buf, zonelen);
+  memcpy_glbl_to_priv(saltbuf, inbuffer->salt_buf, saltlen);
 
-  memcpy_glbl_to_priv(namebuf, inbuffer[idx].name_buf, namelen);
-  memcpy_glbl_to_priv(saltbuf, inbuffer[idx].salt_buf, saltlen);
+  id = get_global_id(0);
+  idx = id;
+  w = (uchar)(id % 36);
+  id /= 36;
+  x = (uchar)(id % 36);
+  id /= 36;
+  y = (uchar)(id % 36);
+  z = (uchar)(id / 36);
+
+  namebuf[inbuffer->indexes[0]] = nsec3walkcharset[w];
+  namebuf[inbuffer->indexes[1]] = nsec3walkcharset[x];
+  namebuf[inbuffer->indexes[2]] = nsec3walkcharset[y];
+  namebuf[inbuffer->indexes[3]] = nsec3walkcharset[z];
 
   SHA1Init(&ctx);
   SHA1Update(&ctx, namebuf, namelen);
@@ -370,6 +397,5 @@ __kernel void nsec3_main(__global const nsec3_inbuf *inbuffer,
   }
 
   memcpy_priv_to_glbl(outbuffer[idx].hash, hashbuf, hashlen);
-  memcpy_glbl(outbuffer[idx].name_buf, inbuffer[idx].name_buf, namelen);
-  outbuffer[idx].name_len = inbuffer[idx].name_len;
+  memcpy_priv_to_glbl(outbuffer[idx].name_buf, namebuf + 1, labellen);
 }

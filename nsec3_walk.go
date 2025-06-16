@@ -223,11 +223,28 @@ const nsec3walkcharset = "0123456789abcdefghijklmnopqrstuvwxyz"
 
 // generate random (pre-encoded) DNS label for a string matching the pattern ^[0-9a-z]{20,63}$
 func randomLabel() []byte {
-	length := rand.IntN(63-20) + 20
+	length := rangeRandNum(20, 63)
 	ret := make([]byte, length+1)
 	ret[0] = byte(length)
 	for i := range length {
 		ret[i+1] = byte(nsec3walkcharset[rand.IntN(len(nsec3walkcharset))])
+	}
+	return ret
+}
+
+func rangeRandNum(minV, maxV int) int {
+	diff := maxV - minV
+	return minV + rand.IntN(diff)
+}
+func nRandNums(minV, maxV, n int) []int {
+	ret := make([]int, n)
+
+	for i := range n {
+		num := rangeRandNum(minV, maxV)
+		for slices.Contains(ret[:i], num) {
+			num = rangeRandNum(minV, maxV)
+		}
+		ret[i] = num
 	}
 	return ret
 }
@@ -237,27 +254,11 @@ func randomLabels(yield func([]byte) bool) {
 		label := randomLabel()
 
 		// pick random different positions in label to permute for batch (aside from length indicator)
-		var w, x, y, z int
-		w = rand.IntN(len(label)-1) + 1
-		x = rand.IntN(len(label)-1) + 1
-		y = rand.IntN(len(label)-1) + 1
-		z = rand.IntN(len(label)-1) + 1
-
-		for {
-			if w == x || w == y || w == z {
-				w = rand.IntN(len(label)-1) + 1
-				continue
-			}
-			if x == y || x == z {
-				x = rand.IntN(len(label)-1) + 1
-				continue
-			}
-			if y == z {
-				y = rand.IntN(len(label)-1) + 1
-				continue
-			}
-			break
-		}
+		slNums := nRandNums(1, len(label), 4)
+		w := slNums[0]
+		x := slNums[1]
+		y := slNums[2]
+		z := slNums[3]
 
 		// 36⁴ (1 679 616) entries per batch
 
@@ -331,7 +332,16 @@ const MULTITHREAD_NSEC3_THRESHOLD = 2
 // chooses single-threaded or multi-threaded genHashes variant based on iteration number
 func genHashesWrap(zone, salt []byte, iterations int) iter.Seq[hashEntry] {
 	if !noCL {
-		return nsec3HashOpenCLIter(zone, salt, iterations)
+		ch, cancel := nsec3HashOpenCL(zone, salt, iterations)
+		return func(yield func(hashEntry) bool) {
+			defer cancel()
+			for e := range ch {
+				if !yield(e) {
+					return
+				}
+			}
+		}
+
 	}
 
 	if iterations < MULTITHREAD_NSEC3_THRESHOLD {
@@ -414,7 +424,7 @@ func nsec3Query(connCache connCache, name string) *dns.Msg {
 
 	for range RETRIES {
 		res, err := plainResolveRandom(msg, connCache)
-		if err == nil {
+		if err == nil && res.Rcode != dns.RcodeServerFailure {
 			return res
 		}
 	}
@@ -473,8 +483,7 @@ func nsec3Compare(v1, v2 Nsec3Hash) int {
 }
 
 const (
-	NSEC3_WALK_LIMIT = 1 << 34
-	MIN_DIFF         = 1024
+	MIN_DIFF = 1024
 )
 
 var minDiff = big.NewInt(MIN_DIFF)
@@ -497,8 +506,6 @@ func nsec3WalkResolve(connCache connCache, _ dns.Msg, zd *retryWrap[fieldData, e
 	wz.salt = check1(hex.AppendDecode(nil, []byte(nsec3Param.Salt)))
 	wz.iterations = int(nsec3Param.Iterations)
 
-	var expanded bool
-
 	zoneB := []byte(wz.zone)
 
 	encodedZone := make([]byte, 255)
@@ -507,16 +514,8 @@ func nsec3WalkResolve(connCache connCache, _ dns.Msg, zd *retryWrap[fieldData, e
 
 outerLoop:
 	for {
-		expanded = false
-		i := NSEC3_WALK_LIMIT
-
 	hashLoop:
 		for guess := range genHashesWrap(encodedZone, wz.salt, wz.iterations) {
-			i--
-			if i == 0 {
-				break
-			}
-
 			if wz.contains(guess.hash) {
 				continue
 			}
@@ -559,9 +558,7 @@ outerLoop:
 						return nsec3WalkZone{}, errors.New("nsec3 white lies?")
 					}
 
-					if wz.addKnown(rangeset.RangeEntry[Nsec3Hash]{Start: start, End: end}, rrT.TypeBitMap) {
-						expanded = true
-					}
+					wz.addKnown(rangeset.RangeEntry[Nsec3Hash]{Start: start, End: end}, rrT.TypeBitMap)
 				}
 			}
 
@@ -572,9 +569,19 @@ outerLoop:
 				}
 			}
 
-			if !expanded {
-				continue
-			}
+			/*
+				if !noCL {
+					// validate hash
+					reconstructedLabel := []byte{byte(len(guess.label))}
+					reconstructedLabel = append(reconstructedLabel, guess.label...)
+					expected := nsec3Hash(reconstructedLabel, encodedZone, wz.salt, wz.iterations)
+					if expected != guess.hash {
+						log.Panicf("lol broken opencl, expected %s, got %s, label %s", expected, guess.hash, guess.label)
+					}
+
+				}
+			*/
+
 			fmt.Printf("zone=%s %d ranges %d known names %s zone discovered\n", wz.zone, len(wz.knownRanges.Ranges), len(wz.rrTypes), wz.percentDiscovered())
 
 			if len(wz.knownRanges.Ranges) < 100 {

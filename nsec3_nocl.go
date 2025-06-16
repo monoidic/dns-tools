@@ -2,10 +2,8 @@
 
 package main
 
-import "iter"
-
 const hasOpenCL = false
 
-func nsec3HashOpenCLIter(zone, salt []byte, iterations int) iter.Seq[hashEntry] {
+func nsec3HashOpenCL(zone, salt []byte, iterations int) (ch <-chan hashEntry, cancel func()) {
 	panic("unreachable")
 }
