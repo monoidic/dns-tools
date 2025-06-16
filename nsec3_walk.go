@@ -331,6 +331,10 @@ const MULTITHREAD_NSEC3_THRESHOLD = 2
 
 // chooses single-threaded or multi-threaded genHashes variant based on iteration number
 func genHashesWrap(zone, salt []byte, iterations int) iter.Seq[hashEntry] {
+	if !noCL && openclDevice == nil {
+		initOpenclInfo()
+	}
+
 	if !noCL {
 		ch, cancel := nsec3HashOpenCL(zone, salt, iterations)
 		return func(yield func(hashEntry) bool) {
@@ -512,89 +516,85 @@ func nsec3WalkResolve(connCache connCache, _ dns.Msg, zd *retryWrap[fieldData, e
 	off := check1(dns.PackDomainName(wz.zone, encodedZone, 0, nil, false))
 	encodedZone = encodedZone[:off]
 
-outerLoop:
-	for {
-	hashLoop:
-		for guess := range genHashesWrap(encodedZone, wz.salt, wz.iterations) {
-			if wz.contains(guess.hash) {
-				continue
+hashLoop:
+	for guess := range genHashesWrap(encodedZone, wz.salt, wz.iterations) {
+		if wz.contains(guess.hash) {
+			continue
+		}
+
+		hashName := string(slices.Concat(guess.label, []byte("."), zoneB))
+
+		res := nsec3Query(connCache, hashName)
+		if res == nil {
+			continue
+		}
+
+		for _, rr := range res.Ns {
+			switch rrT := rr.(type) {
+			case *dns.SOA:
+				normalizeRR(rrT)
+				if soaZone := rrT.Hdr.Name; dnsCompare(wz.zone, soaZone) != 0 && dns.IsSubDomain(wz.zone, soaZone) {
+					continue hashLoop
+				}
 			}
+		}
 
-			hashName := string(slices.Concat(guess.label, []byte("."), zoneB))
+		var sawThis bool
 
-			res := nsec3Query(connCache, hashName)
-			if res == nil {
-				continue
+		for _, rr := range res.Ns {
+			switch rrT := rr.(type) {
+			case *dns.NSEC3:
+				normalizeRR(rrT)
+				if !(rrT.Salt == nsec3Param.Salt && rrT.Iterations == nsec3Param.Iterations) {
+					// params changed in the middle of the walk
+					return nsec3WalkZone{}, errors.New("nsec3 params changed")
+				}
+
+				if rrT.Cover(hashName) {
+					sawThis = true
+				}
+
+				start, end := nsec3RRToHashes(rrT)
+
+				if labelDiffSmall(start, end) {
+					return nsec3WalkZone{}, errors.New("nsec3 white lies?")
+				}
+
+				wz.addKnown(rangeset.RangeEntry[Nsec3Hash]{Start: start, End: end}, rrT.TypeBitMap)
 			}
+		}
 
+		if !sawThis {
+			fmt.Printf("expected to see something covering hashName=%s hash=%s did not\n", hashName, guess.hash)
 			for _, rr := range res.Ns {
-				switch rrT := rr.(type) {
-				case *dns.SOA:
-					normalizeRR(rrT)
-					if soaZone := rrT.Hdr.Name; dnsCompare(wz.zone, soaZone) != 0 && dns.IsSubDomain(wz.zone, soaZone) {
-						continue hashLoop
-					}
-				}
+				fmt.Println(rr)
 			}
+		}
 
-			var sawThis bool
-
-			for _, rr := range res.Ns {
-				switch rrT := rr.(type) {
-				case *dns.NSEC3:
-					normalizeRR(rrT)
-					if !(rrT.Salt == nsec3Param.Salt && rrT.Iterations == nsec3Param.Iterations) {
-						// params changed in the middle of the walk
-						return nsec3WalkZone{}, errors.New("nsec3 params changed")
-					}
-
-					if rrT.Cover(hashName) {
-						sawThis = true
-					}
-
-					start, end := nsec3RRToHashes(rrT)
-
-					if labelDiffSmall(start, end) {
-						return nsec3WalkZone{}, errors.New("nsec3 white lies?")
-					}
-
-					wz.addKnown(rangeset.RangeEntry[Nsec3Hash]{Start: start, End: end}, rrT.TypeBitMap)
+		/*
+			if !noCL {
+				// validate hash
+				reconstructedLabel := []byte{byte(len(guess.label))}
+				reconstructedLabel = append(reconstructedLabel, guess.label...)
+				expected := nsec3Hash(reconstructedLabel, encodedZone, wz.salt, wz.iterations)
+				if expected != guess.hash {
+					log.Panicf("lol broken opencl, expected %s, got %s, label %s", expected, guess.hash, guess.label)
 				}
+
 			}
+		*/
 
-			if !sawThis {
-				fmt.Printf("expected to see something covering hashName=%s hash=%s did not\n", hashName, guess.hash)
-				for _, rr := range res.Ns {
-					fmt.Println(rr)
-				}
+		fmt.Printf("zone=%s %d ranges %d known names %s zone discovered\n", wz.zone, len(wz.knownRanges.Ranges), len(wz.rrTypes), wz.percentDiscovered())
+
+		if len(wz.knownRanges.Ranges) < 100 {
+			fmt.Println(wz.String())
+		}
+
+		if len(wz.knownRanges.Ranges) == 1 {
+			rn := wz.knownRanges.Ranges[0]
+			if rn.Start == nsec3HashStart && rn.End == nsec3HashEnd {
+				break
 			}
-
-			/*
-				if !noCL {
-					// validate hash
-					reconstructedLabel := []byte{byte(len(guess.label))}
-					reconstructedLabel = append(reconstructedLabel, guess.label...)
-					expected := nsec3Hash(reconstructedLabel, encodedZone, wz.salt, wz.iterations)
-					if expected != guess.hash {
-						log.Panicf("lol broken opencl, expected %s, got %s, label %s", expected, guess.hash, guess.label)
-					}
-
-				}
-			*/
-
-			fmt.Printf("zone=%s %d ranges %d known names %s zone discovered\n", wz.zone, len(wz.knownRanges.Ranges), len(wz.rrTypes), wz.percentDiscovered())
-
-			if len(wz.knownRanges.Ranges) < 100 {
-				fmt.Println(wz.String())
-			}
-
-			if len(wz.knownRanges.Ranges) == 1 {
-				rn := wz.knownRanges.Ranges[0]
-				if rn.Start == nsec3HashStart && rn.End == nsec3HashEnd {
-					break outerLoop
-				}
-			}
-
 		}
 	}
 

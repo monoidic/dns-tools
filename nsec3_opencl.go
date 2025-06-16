@@ -36,13 +36,27 @@ type OpenCLNSEC3Out struct {
 // follow same scheme as nocl variant; 36⁴ = 1679616 names per batch
 const OPENCL_ITERATIONS = 36 * 36 * 36 * 36
 
+func initOpenclInfo() {
+	// TODO there's probably a more intelligent way of picking a device, or we could let the user decide
+	info := check1(cl.Info())
+	if len(info.Platforms) == 0 || len(info.Platforms[0].Devices) == 0 {
+		// fall back to nocl
+		noCL = true
+		return
+	}
+
+	openclDevice = info.Platforms[0].Devices[0]
+
+}
+
+var openclDevice *cl.OpenCLDevice
+
 func nsec3HashOpenCL(zone, salt []byte, iterations int) (ch <-chan hashEntry, cancel func()) {
 	outCh := make(chan hashEntry, MIDBUFLEN)
 	cancelCh := make(chan empty)
 	cancel = func() { close(cancelCh) }
 
-	info := check1(cl.Info())
-	device := info.Platforms[0].Devices[0]
+	device := openclDevice
 	runner := check1(device.InitRunner())
 
 	codes := []string{sha1_cl}
