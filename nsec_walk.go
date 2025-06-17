@@ -324,7 +324,6 @@ func nsecWalk(db *sql.DB) {
 `, db), nsecWalkMaster)
 }
 
-// TODO use splitAscii here
 func _getMiddle(zone string, rn rangeset.RangeEntry[string]) iter.Seq[[]string] {
 	start := rn.Start
 	end := rn.End
@@ -332,59 +331,76 @@ func _getMiddle(zone string, rn rangeset.RangeEntry[string]) iter.Seq[[]string] 
 		splitStart := dns.SplitDomainName(start)
 		splitEnd := dns.SplitDomainName(end)
 
-		if !(splitStart == nil || splitEnd == nil) {
-			splitStartCopy := slices.Clone(splitStart)
-			splitEndCopy := slices.Clone(splitEnd)
-			slices.Reverse(splitStartCopy)
-			slices.Reverse(splitEndCopy)
-
-			var commonLabels int
-			for i := range min(len(splitStartCopy), len(splitEndCopy)) {
-				if splitStartCopy[i] != splitEndCopy[i] {
-					break
-				}
-				commonLabels++
-			}
-
-			common := splitStartCopy[:commonLabels]
-			slices.Reverse(common)
-
-			startNum := big.NewInt(0)
-			endNum := big.NewInt(0)
-			endNum.SetString(maxLabelNum, 10)
-			var startLen, endLen int
-
-			if commonLabels < len(splitStartCopy) {
-				startNum = labelToNum(splitStartCopy[commonLabels])
-				startLen = len(splitStartCopy[commonLabels])
-			}
-			if commonLabels < len(splitEndCopy) {
-				endNum = labelToNum(splitEndCopy[commonLabels])
-				endLen = len(splitEndCopy[commonLabels])
-			}
-
-			if startNum.Cmp(endNum) != -1 {
-				// startNum >= endNum
-				startNum.SetInt64(0)
-				endNum.SetString(maxLabelNum, 10)
-			}
-
-			// TODO could run up against the limit of 255 bytes per name
-			splitALen := max(20, min(63, 2+max(startLen, endLen)))
-			for splitS := range splitAscii(startNum, endNum, splitSize, splitALen) {
-				res := append([]string{splitS}, common...)
-				if !yield(res) {
-					return
-				}
-			}
-		}
-
 		if !(end == zone || end == ".") && splitEnd == nil {
 			panic(fmt.Sprintf("end splits to nil: %s", end))
 		}
 
 		if (!(start == zone || start == ".")) && splitStart == nil {
 			panic(fmt.Sprintf("start splits to nil: %s", start))
+		}
+
+		if splitStart == nil || splitEnd == nil {
+			return
+		}
+
+		splitStartCopy := slices.Clone(splitStart)
+		splitEndCopy := slices.Clone(splitEnd)
+		slices.Reverse(splitStartCopy)
+		slices.Reverse(splitEndCopy)
+
+		var commonLabels int
+		for i := range min(len(splitStartCopy), len(splitEndCopy)) {
+			if splitStartCopy[i] != splitEndCopy[i] {
+				break
+			}
+			commonLabels++
+		}
+
+		common := splitStartCopy[:commonLabels]
+		slices.Reverse(common)
+
+		if splitEnd[0] == "*" {
+			// random crap that should work for the range ["example.com."", "*.example.com."]
+			// shouldn't run into this very often anyway
+			for _, s := range []string{" ", "!", "$"} {
+				res := append([]string{s}, common...)
+				if !yield(res) {
+					return
+				}
+			}
+
+			if !yield(common) {
+				return
+			}
+		}
+
+		startNum := big.NewInt(0)
+		endNum := big.NewInt(0)
+		endNum.SetString(maxLabelNum, 10)
+		var startLen, endLen int
+
+		if commonLabels < len(splitStartCopy) {
+			startNum = labelToNum(splitStartCopy[commonLabels])
+			startLen = len(splitStartCopy[commonLabels])
+		}
+		if commonLabels < len(splitEndCopy) {
+			endNum = labelToNum(splitEndCopy[commonLabels])
+			endLen = len(splitEndCopy[commonLabels])
+		}
+
+		if startNum.Cmp(endNum) != -1 {
+			// startNum >= endNum
+			startNum.SetInt64(0)
+			endNum.SetString(maxLabelNum, 10)
+		}
+
+		// TODO could run up against the limit of 255 bytes per name
+		splitALen := max(20, min(63, 2+max(startLen, endLen)))
+		for splitS := range splitAscii(startNum, endNum, splitSize, splitALen) {
+			res := append([]string{splitS}, common...)
+			if !yield(res) {
+				return
+			}
 		}
 	}
 }
