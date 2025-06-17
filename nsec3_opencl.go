@@ -19,16 +19,15 @@ var sha1_cl string
 type OpenCLNSEC3In struct {
 	Iterations uint16
 	LabelLen   uint8
-	ZoneLen    uint8
+	NameLen    uint8
 	SaltLen    uint8
-	Zone       [255]byte
-	Label      [63]byte
+	Name       [255]byte
 	Salt       [255]byte
 	Indexes    [4]uint8
 }
 
 type OpenCLNSEC3Out struct {
-	// known by receiver anyway
+	// the rest is known by the receiver anyway
 	Hash [20]byte
 	Name [63]byte
 }
@@ -46,7 +45,6 @@ func initOpenclInfo() {
 	}
 
 	openclDevice = info.Platforms[0].Devices[0]
-
 }
 
 var openclDevice *cl.OpenCLDevice
@@ -65,11 +63,10 @@ func nsec3HashOpenCL(zone, salt []byte, iterations int) (ch <-chan hashEntry, ca
 	check(runner.CompileKernels(codes, kernelNameList, ""))
 
 	inEntries := make([]OpenCLNSEC3In, 1)
-	copy(inEntries[0].Salt[:], salt)
-	copy(inEntries[0].Zone[:], zone)
-	inEntries[0].SaltLen = uint8(len(salt))
-	inEntries[0].ZoneLen = uint8(len(zone))
-	inEntries[0].Iterations = uint16(iterations)
+	inEntry := &inEntries[0]
+	copy(inEntry.Salt[:], salt)
+	inEntry.SaltLen = uint8(len(salt))
+	inEntry.Iterations = uint16(iterations)
 
 	inBuf := check1(cl.CreateBuffer(runner, cl.READ_ONLY|cl.COPY_HOST_PTR, inEntries))
 	outBuf := check1(runner.CreateEmptyBuffer(cl.WRITE_ONLY, int(unsafe.Sizeof(OpenCLNSEC3Out{}))*OPENCL_ITERATIONS))
@@ -79,25 +76,27 @@ func nsec3HashOpenCL(zone, salt []byte, iterations int) (ch <-chan hashEntry, ca
 		defer runner.Free()
 		for {
 			// strip prefix for... reasons
-			label := randomLabel()[1:]
-			copy(inEntries[0].Label[:], label)
-			inEntries[0].LabelLen = uint8(len(label))
+			label := randomLabel()
+			labelLen := len(label) - 1
 
-			randNums := nRandNums(1, len(label), 4)
+			copy(inEntry.Name[:], label)
+			copy(inEntry.Name[len(label):], zone)
+			inEntry.LabelLen = uint8(labelLen)
+			inEntry.NameLen = uint8(1 + labelLen + len(zone))
 
-			for i := range inEntries[0].Indexes {
-				inEntries[0].Indexes[i] = uint8(randNums[i])
+			randNums := nRandNums(1, labelLen, 4)
+
+			for i := range inEntry.Indexes {
+				inEntry.Indexes[i] = uint8(randNums[i])
 			}
 
 			check(cl.WriteBuffer(runner, 0, inBuf, inEntries, true))
 			check(runner.RunKernel("nsec3_main", 1, nil, []uint64{OPENCL_ITERATIONS}, nil, []cl.KernelParam{cl.BufferParam(inBuf), cl.BufferParam(outBuf)}, true))
 			check(cl.ReadBuffer(runner, 0, outBuf, results))
 
-			outLabelLen := len(label)
-
 			for _, outEntry := range results {
 				entry := hashEntry{
-					label: slices.Clone(outEntry.Name[:outLabelLen]),
+					label: slices.Clone(outEntry.Name[:labelLen]),
 					hash:  Nsec3Hash{outEntry.Hash},
 				}
 
