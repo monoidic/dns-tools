@@ -222,7 +222,7 @@ func nsecWalkResolve(_ connCache, _ dns.Msg, zd *retryWrap[fieldData, empty]) (*
 			cond.L.Lock()
 			freeRangesAvailable.Store(true)
 			cond.L.Unlock()
-			cond.Broadcast()
+			cond.Signal()
 		}
 	}
 
