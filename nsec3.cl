@@ -21,7 +21,7 @@
 def_memcpy(glbl_to_priv, __private, __global)
     def_memcpy(priv_to_glbl, __global, __private)
 
-        typedef struct { // 582 bytes
+        typedef struct { // 519 bytes
   ushort iterations;
   uchar label_len;
   uchar name_len;

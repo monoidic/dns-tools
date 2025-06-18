@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 	"iter"
-	"slices"
 	"strings"
 	"sync"
 
@@ -116,15 +115,13 @@ func checkNsecWorker(dataChan <-chan retryWrap[fieldData, empty], refeedChan cha
 }
 
 func zoneRandomName(zone string) string {
-	encodedZone := make([]byte, 255)
-	off := check1(dns.PackDomainName(zone, encodedZone, 0, nil, false))
-	encodedZone = encodedZone[:off]
-
 	var ret string
-	for guess := range genHashes(encodedZone, nil, 0) {
-		ret = string(slices.Concat(guess.label, []byte("."), []byte(zone)))
-		break
+	label := string(randomLabel()[1:])
+	if zone == "." {
+		zone = ""
 	}
+	ret = label + "." + zone
+
 	return ret
 }
 

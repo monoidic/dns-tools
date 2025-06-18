@@ -4,7 +4,7 @@ go 1.23.4
 
 require (
 	github.com/CyberChainXyz/go-opencl v0.0.0-20241229131621-216260c11a44
-	github.com/jellydator/ttlcache/v3 v3.3.0
+	github.com/jellydator/ttlcache/v3 v3.4.0
 	github.com/mattn/go-sqlite3 v1.14.28
 	github.com/miekg/dns v1.1.66
 	github.com/monoidic/cidranger v1.0.4
