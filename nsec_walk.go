@@ -219,6 +219,7 @@ func nsecWalkResolve(_ connCache, _ dns.Msg, zd *retryWrap[fieldData, empty]) (*
 		}
 
 		if expanded {
+			fmt.Println(wz.knownRanges.Ranges)
 			cond.L.Lock()
 			freeRangesAvailable.Store(true)
 			cond.L.Unlock()
