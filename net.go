@@ -20,7 +20,7 @@ type (
 	insertF[resultType any]                           func(tableMap TableMap, stmtMap StmtMap, datum resultType)
 	readerRecurseF[inType any]                        func(db *sql.DB) (iter.Seq[inType], bool)
 	writerF[inType any]                               func(db *sql.DB, seq iter.Seq[inType])
-	processDataF[inType any, resultType, tmpType any] func(c connCache, msg dns.Msg, fd *retryWrap[inType, tmpType]) (resultType, error)
+	processDataF[inType any, resultType, tmpType any] func(c *connCache, msg *dns.Msg, fd *retryWrap[inType, tmpType]) (resultType, error)
 )
 
 type mxData struct {
@@ -146,7 +146,7 @@ var chaosTXTNames = []string{
 }
 
 // set up a connCache
-func getConnCache() connCache {
+func getConnCache() *connCache {
 	// TODO use ttlcache.WithCapacity as well?
 	client := &dns.Client{Net: "udp"}
 
@@ -169,7 +169,7 @@ func getConnCache() connCache {
 		udpCache.OnEviction(connCacheEviction)
 	}
 
-	return connCache{
+	return &connCache{
 		client:      client,
 		cookieCache: cookieCache,
 		tcpCache:    tcpCache,
@@ -196,11 +196,11 @@ func getNull[T any](cache *ttlcache.Cache[string, T], key string) T {
 }
 
 // perform DNS query to the specified hostname, using cookie and connection caches
-func exchange(hostname string, msg dns.Msg, cookieCache *ttlcache.Cache[string, string], connCache *ttlcache.Cache[string, *dns.Conn], client *dns.Client) (*dns.Msg, error) {
+func exchange(hostname string, msg *dns.Msg, cookieCache *ttlcache.Cache[string, string], connCache *ttlcache.Cache[string, *dns.Conn], client *dns.Client) (*dns.Msg, error) {
 	msg.Id = dns.Id()
 
 	if cookie := getNull(cookieCache, hostname); cookie != "" {
-		oCookie := msgAddCookie(&msg)
+		oCookie := msgAddCookie(msg)
 		oCookie.Cookie = cookie
 	}
 
@@ -209,7 +209,7 @@ func exchange(hostname string, msg dns.Msg, cookieCache *ttlcache.Cache[string, 
 		return nil, Error{s: "could not connect to host"}
 	}
 
-	res, _, err := client.ExchangeWithConn(&msg, conn)
+	res, _, err := client.ExchangeWithConn(msg, conn)
 	if err != nil {
 		connCache.Delete(hostname)
 	} else {
@@ -221,12 +221,12 @@ func exchange(hostname string, msg dns.Msg, cookieCache *ttlcache.Cache[string, 
 }
 
 // perform DNS query, using caches, with TCP
-func (c connCache) tcpExchange(hostname string, msg dns.Msg) (*dns.Msg, error) {
+func (c connCache) tcpExchange(hostname string, msg *dns.Msg) (*dns.Msg, error) {
 	return exchange(hostname, msg, c.cookieCache, c.tcpCache, c.client)
 }
 
 // perform DNS query, using caches, with UDP
-func (c connCache) udpExchange(hostname string, msg dns.Msg) (*dns.Msg, error) {
+func (c connCache) udpExchange(hostname string, msg *dns.Msg) (*dns.Msg, error) {
 	return exchange(hostname, msg, c.cookieCache, c.udpCache, c.client)
 }
 
@@ -333,12 +333,12 @@ func connCacheEviction(_ context.Context, _ ttlcache.EvictionReason, item *ttlca
 	item.Value().Close()
 }
 
-func plainResolveRandom(msg dns.Msg, connCache connCache) (*dns.Msg, error) {
+func plainResolveRandom(msg *dns.Msg, connCache *connCache) (*dns.Msg, error) {
 	return plainResolve(msg, connCache, randomNS())
 }
 
 // perform basic DNS query, optionally with TCP fallback, to a namserver, while using connCache
-func plainResolve(msg dns.Msg, connCache connCache, nameserver string) (*dns.Msg, error) {
+func plainResolve(msg *dns.Msg, connCache *connCache, nameserver string) (*dns.Msg, error) {
 	var res *dns.Msg
 	var err error
 	if tcpOnly {
@@ -385,7 +385,7 @@ func msgSetSize(msg *dns.Msg) {
 }
 
 // sets up a connCache and reads in messages from inChan, passes them to the specified `processData` function, and passes the output to outChan
-func resolverWorker[inType, resultType, tmpType any](dataChan <-chan retryWrap[inType, tmpType], refeedChan chan<- retryWrap[inType, tmpType], outChan chan<- resultType, msg dns.Msg, processData processDataF[inType, resultType, tmpType], wg, retryWg *sync.WaitGroup) {
+func resolverWorker[inType, resultType, tmpType any](dataChan <-chan retryWrap[inType, tmpType], refeedChan chan<- retryWrap[inType, tmpType], outChan chan<- resultType, msg *dns.Msg, processData processDataF[inType, resultType, tmpType], wg, retryWg *sync.WaitGroup) {
 	connCache := getConnCache()
 	defer connCache.clear()
 	defer wg.Done()

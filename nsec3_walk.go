@@ -375,7 +375,7 @@ func nsec3Walk(db *sql.DB) {
 `, db), nsec3WalkMaster)
 }
 
-func nsec3ParamQuery(connCache connCache, zone string) *dns.NSEC3PARAM {
+func nsec3ParamQuery(connCache *connCache, zone string) *dns.NSEC3PARAM {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -393,7 +393,7 @@ func nsec3ParamQuery(connCache connCache, zone string) *dns.NSEC3PARAM {
 	msg.Extra[0].(*dns.OPT).SetDo()
 
 	for range RETRIES {
-		res, err := plainResolveRandom(msg, connCache)
+		res, err := plainResolveRandom(&msg, connCache)
 		if err != nil {
 			continue
 		}
@@ -409,7 +409,7 @@ func nsec3ParamQuery(connCache connCache, zone string) *dns.NSEC3PARAM {
 	return nil
 }
 
-func nsec3Query(connCache connCache, name string) *dns.Msg {
+func nsec3Query(connCache *connCache, name string) *dns.Msg {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -427,7 +427,7 @@ func nsec3Query(connCache connCache, name string) *dns.Msg {
 	msg.Extra[0].(*dns.OPT).SetDo()
 
 	for range RETRIES {
-		res, err := plainResolveRandom(msg, connCache)
+		res, err := plainResolveRandom(&msg, connCache)
 		if err == nil && res.Rcode != dns.RcodeServerFailure {
 			return res
 		}
@@ -454,7 +454,7 @@ func nsec3WalkMaster(db *sql.DB, seq iter.Seq[fieldData]) {
 }
 
 func nsec3WalkWorker(zoneChan <-chan retryWrap[fieldData, empty], refeedChan chan<- retryWrap[fieldData, empty], dataOutChan chan<- nsec3WalkZone, wg, retryWg *sync.WaitGroup) {
-	resolverWorker(zoneChan, refeedChan, dataOutChan, dns.Msg{}, nsec3WalkResolve, wg, retryWg)
+	resolverWorker(zoneChan, refeedChan, dataOutChan, &dns.Msg{}, nsec3WalkResolve, wg, retryWg)
 }
 
 func nsec3WalkInsert(tableMap TableMap, stmtMap StmtMap, zw nsec3WalkZone) {
@@ -492,7 +492,7 @@ const (
 
 var minDiff = big.NewInt(MIN_DIFF)
 
-func nsec3WalkResolve(connCache connCache, _ dns.Msg, zd *retryWrap[fieldData, empty]) (nsec3WalkZone, error) {
+func nsec3WalkResolve(connCache *connCache, _ *dns.Msg, zd *retryWrap[fieldData, empty]) (nsec3WalkZone, error) {
 	wz := nsec3WalkZone{
 		zone:        zd.val.name,
 		id:          zd.val.id,

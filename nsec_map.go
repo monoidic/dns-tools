@@ -111,7 +111,7 @@ func checkNsecWorker(dataChan <-chan retryWrap[fieldData, empty], refeedChan cha
 	msgSetSize(&msg)
 	setOpt(&msg).SetDo()
 
-	resolverWorker(dataChan, refeedChan, outChan, msg, checkNsecQuery, wg, retryWg)
+	resolverWorker(dataChan, refeedChan, outChan, &msg, checkNsecQuery, wg, retryWg)
 }
 
 func zoneRandomName(zone string) string {
@@ -125,7 +125,7 @@ func zoneRandomName(zone string) string {
 	return ret
 }
 
-func checkNsecQuery(connCache connCache, msg dns.Msg, fd *retryWrap[fieldData, empty]) (fdr fdResults, err error) {
+func checkNsecQuery(connCache *connCache, msg *dns.Msg, fd *retryWrap[fieldData, empty]) (fdr fdResults, err error) {
 	var nsecState, rname, mname, nsecS string
 	var res *dns.Msg
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"iter"
@@ -11,23 +12,26 @@ import (
 
 	"github.com/miekg/dns"
 	"github.com/monoidic/rangeset"
+	"golang.org/x/sync/semaphore"
 )
 
 type walkZone struct {
-	zone        string
-	id          int64
-	knownRanges rangeset.RangeSet[string]
-	subdomains  Set[string]
-	rrTypes     map[string][]string
+	zone       string
+	id         int64
+	subdomains Set[string]
+	rrTypes    map[string][]string
+	sem        *semaphore.Weighted
+	wg         *sync.WaitGroup
+	pool       *sync.Pool
+	mux        *sync.Mutex
 }
 
-func (wz *walkZone) addKnown(rn rangeset.RangeEntry[string], bitmap []uint16) bool {
-	if !dns.IsSubDomain(wz.zone, rn.Start) {
+func addKnown(zone string, rs *rangeset.RangeSet[string], rn rangeset.RangeEntry[string], bitmap []uint16, rrTypes map[string][]string) bool {
+	if !dns.IsSubDomain(zone, rn.Start) {
 		return false
-		// TODO list these somewhere?
 	}
 
-	if wz.knownRanges.ContainsRange(rn) {
+	if rs.ContainsRange(rn) {
 		return false
 	}
 
@@ -40,118 +44,92 @@ func (wz *walkZone) addKnown(rn rangeset.RangeEntry[string], bitmap []uint16) bo
 		}
 	}
 
-	wz.rrTypes[rn.Start] = nsecTypes
-	wz.knownRanges.Add(rn)
+	rrTypes[rn.Start] = nsecTypes
+	rs.Add(rn)
 
 	return true
 }
 
-func (wz *walkZone) unknownRanges(yield func(rangeset.RangeEntry[string]) bool) {
-	l := len(wz.knownRanges.Ranges)
+func unknownRanges(zone string, rs *rangeset.RangeSet[string]) iter.Seq[rangeset.RangeEntry[string]] {
+	return func(yield func(rangeset.RangeEntry[string]) bool) {
+		l := len(rs.Ranges)
+
+		if l == 0 {
+			// no known results, just give the whole zone
+			_ = yield(rangeset.RangeEntry[string]{Start: zone, End: zone})
+			return
+		}
+
+		firstName := rs.Ranges[0].Start
+		if firstName != zone {
+			// unknown range before first known range
+			if !yield(rangeset.RangeEntry[string]{Start: zone, End: firstName}) {
+				return
+			}
+		}
+
+		last := rs.Ranges[0].End
+		for i := range l - 1 {
+			start := rs.Ranges[i].End
+			end := rs.Ranges[i+1].Start
+			last = rs.Ranges[i+1].End
+
+			if !yield(rangeset.RangeEntry[string]{Start: start, End: end}) {
+				return
+			}
+		}
+
+		if last != zone {
+			if !yield(rangeset.RangeEntry[string]{Start: last, End: zone}) {
+				return
+			}
+		}
+	}
+}
+
+func nsecWalkWorker(zoneChan <-chan retryWrap[fieldData, empty], refeedChan chan<- retryWrap[fieldData, empty], dataOutChan chan<- *walkZone, wg, retryWg *sync.WaitGroup) {
+	resolverWorker(zoneChan, refeedChan, dataOutChan, &dns.Msg{}, nsecWalkResolve, wg, retryWg)
+}
+
+func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[string]) {
+	defer wz.wg.Done()
+
 	zone := wz.zone
 
-	if l == 0 {
-		// no known results, just give the whole zone
-		_ = yield(rangeset.RangeEntry[string]{Start: zone, End: zone})
-		return
-	}
+	knownRanges := rangeset.RangeSet[string]{Compare: dnsCompare, HasRWrap: true, RWrapV: zone}
 
-	firstName := wz.knownRanges.Ranges[0].Start
-	if firstName != zone {
-		// unknown range before first known range
-		if !yield(rangeset.RangeEntry[string]{Start: zone, End: firstName}) {
-			return
+	full := rangeset.RangeEntry[string]{Start: zone, End: zone}
+	for _, rn := range []rangeset.RangeEntry[string]{{Start: zone, End: thisRn.Start}, {Start: thisRn.End, End: zone}} {
+		if rn != full {
+			knownRanges.Add(rn)
 		}
 	}
 
-	last := wz.knownRanges.Ranges[0].End
-	for i := range l - 1 {
-		start := wz.knownRanges.Ranges[i].End
-		end := wz.knownRanges.Ranges[i+1].Start
-		last = wz.knownRanges.Ranges[i+1].End
+	unknowns := slices.Collect(unknownRanges(zone, &knownRanges))
 
-		if !yield(rangeset.RangeEntry[string]{Start: start, End: end}) {
-			return
-		}
-	}
+	for _, rn := range unknowns {
+		for middle := range getMiddle(zone, rn) {
+			wz.sem.Acquire(context.Background(), 1)
+			connCache := wz.pool.Get().(*connCache)
+			msg := nsecWalkerResolve(middle, connCache)
+			wz.pool.Put(connCache)
+			wz.sem.Release(1)
 
-	if last != zone {
-		if !yield(rangeset.RangeEntry[string]{Start: last, End: zone}) {
-			return
-		}
-	}
-}
-
-func nsecWalkWorker(zoneChan <-chan retryWrap[fieldData, empty], refeedChan chan<- retryWrap[fieldData, empty], dataOutChan chan<- walkZone, wg, retryWg *sync.WaitGroup) {
-	resolverWorker(zoneChan, refeedChan, dataOutChan, dns.Msg{}, nsecWalkResolve, wg, retryWg)
-}
-
-// TODO
-// spawn N resolver workers with input/output channels
-// add number of ranges to waitgroup, write each to input channel (initially just one zone,zone), and wait on waitgroup
-// worker generates a number of middle values and tries them all, then writes all the results to the channel and does wg.Done()
-// writer writes all results to walkzone in parallel
-// once all ranges have been written, iterate over zone again until whole zone is known or is not being changed
-// keep track of iterations and whether anything was updated this iteration in writer?
-func nsecWalkResolve(_ connCache, _ dns.Msg, zd *retryWrap[fieldData, empty]) (walkZone, error) {
-	wz := walkZone{
-		zone:        zd.val.name,
-		id:          zd.val.id,
-		rrTypes:     make(map[string][]string),
-		subdomains:  make(Set[string]),
-		knownRanges: rangeset.RangeSet[string]{Compare: dnsCompare, HasRWrap: true, RWrapV: zd.val.name},
-	}
-
-	// fmt.Printf("starting walk on zone %s\n", zone)
-
-	connCaches := make([]connCache, numProcs)
-	for i := range numProcs {
-		cache := getConnCache()
-		connCaches[i] = cache
-		defer cache.clear()
-	}
-
-	for {
-		var expanded bool
-		var wg, workerWg sync.WaitGroup
-
-		workerInChan := make(chan string, MIDBUFLEN)
-		workerOutChan := make(chan *dns.Msg, MIDBUFLEN)
-
-		wg.Add(1)
-		workerWg.Add(numProcs)
-
-		closeChanWait(&wg, workerInChan)
-		closeChanWait(&workerWg, workerOutChan)
-
-		for i := range numProcs {
-			go nsecWalker(connCaches[i], workerInChan, workerOutChan, &wg, &workerWg)
-		}
-
-		go func() {
-			defer wg.Done()
-			for _, rn := range slices.Collect(wz.unknownRanges) {
-				for middle := range getMiddle(wz.zone, rn) {
-					wg.Add(1)
-					workerInChan <- middle
-				}
-			}
-		}()
-
-		for res := range workerOutChan {
-			if res == nil {
+			if msg == nil {
 				continue
 			}
 
 			var foundSubdomains bool
 
-			for _, rr := range res.Ns {
+			for _, rr := range msg.Ns {
 				switch rrT := rr.(type) {
 				case *dns.SOA:
 					normalizeRR(rrT)
-					if soaZone := rrT.Hdr.Name; dnsCompare(wz.zone, soaZone) != 0 && dns.IsSubDomain(wz.zone, soaZone) {
+					if soaZone := rrT.Hdr.Name; dnsCompare(zone, soaZone) != 0 && dns.IsSubDomain(zone, soaZone) {
 						// fmt.Printf("found subdomain %s of domain %s\n", soaZone, zone)
+						wz.mux.Lock()
 						wz.subdomains.Add(soaZone)
+						wz.mux.Unlock()
 						foundSubdomains = true
 					}
 				}
@@ -161,33 +139,62 @@ func nsecWalkResolve(_ connCache, _ dns.Msg, zd *retryWrap[fieldData, empty]) (w
 				continue
 			}
 
-			for _, rr := range res.Ns {
+			var expanded bool
+			for _, rr := range msg.Ns {
 				switch rrT := rr.(type) {
 				case *dns.NSEC:
 					normalizeRR(rrT)
-					if wz.addKnown(rangeset.RangeEntry[string]{Start: rrT.Hdr.Name, End: rrT.NextDomain}, rrT.TypeBitMap) {
+					wz.mux.Lock()
+					if addKnown(zone, &knownRanges, rangeset.RangeEntry[string]{Start: rrT.Hdr.Name, End: rrT.NextDomain}, rrT.TypeBitMap, wz.rrTypes) {
 						// fmt.Printf("added entry %v\n", rrT)
 						expanded = true
 					}
-					// fmt.Printf("%#v\n", wz.knownRanges)
+					wz.mux.Unlock()
 				}
 			}
-		}
 
-		if !expanded {
-			skippedRanges := slices.Collect(wz.unknownRanges)
-			if len(skippedRanges) > 0 {
-				fmt.Printf("skipped ranges: %#v\n", skippedRanges)
+			if expanded {
+				// no need to get more from this range
+				break
 			}
-			break
 		}
 	}
+
+	for rn := range unknownRanges(zone, &knownRanges) {
+		if slices.Contains(unknowns, rn) {
+			// contained in original set of ranges; ignore
+			fmt.Printf("skipped range: %s\n", rn)
+			continue
+		}
+
+		wz.wg.Add(1)
+		go nsecWalkResolveWorker(wz, rn)
+	}
+}
+
+func nsecWalkResolve(_ *connCache, _ *dns.Msg, zd *retryWrap[fieldData, empty]) (*walkZone, error) {
+	wz := &walkZone{
+		zone:       zd.val.name,
+		id:         zd.val.id,
+		rrTypes:    make(map[string][]string),
+		subdomains: make(Set[string]),
+		sem:        semaphore.NewWeighted(int64(numProcs)),
+		wg:         &sync.WaitGroup{},
+		pool:       &sync.Pool{},
+		mux:        &sync.Mutex{},
+	}
+
+	zone := zd.val.name
+
+	wz.pool.New = func() any { return getConnCache() }
+	wz.wg.Add(1)
+	go nsecWalkResolveWorker(wz, rangeset.RangeEntry[string]{Start: zone, End: zone})
+	wz.wg.Wait()
 
 	return wz, nil
 }
 
-func nsecWalker(connCache connCache, inChan <-chan string, outChan chan<- *dns.Msg, wg, workerWg *sync.WaitGroup) {
-	defer workerWg.Done()
+func nsecWalkerResolve(name string, connCache *connCache) *dns.Msg {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -196,32 +203,22 @@ func nsecWalker(connCache connCache, inChan <-chan string, outChan chan<- *dns.M
 		},
 		Question: []dns.Question{{
 			Qclass: dns.ClassINET,
-			// Qtype: dns.TypeNSEC3PARAM,
-			Qtype: dns.TypeAPL,
+			Qtype:  dns.TypeAPL,
+			Name:   name,
 		}},
 	}
+
 	msgSetSize(&msg)
 	msg.Extra[0].(*dns.OPT).SetDo()
 
-	for middle := range inChan {
-		msg.Question[0].Name = middle
-		var err error
-		var res *dns.Msg
-		for range RETRIES {
-			res, err = plainResolveRandom(msg, connCache)
-			if err == nil {
-				break
-			}
-		}
-
+	for range RETRIES {
+		res, err := plainResolveRandom(&msg, connCache)
 		if err == nil {
-			outChan <- res
-		} else {
-			outChan <- nil
+			return res
 		}
-
-		wg.Done()
 	}
+
+	return nil
 }
 
 func nsecWalkMaster(db *sql.DB, seq iter.Seq[fieldData]) {
@@ -286,7 +283,7 @@ func nsecWalkResWrite(tableMap TableMap, stmtMap StmtMap, res nsecWalkResolveRes
 	stmtMap.exec("queried", res.id)
 }
 
-func nsecWalkInsert(tableMap TableMap, stmtMap StmtMap, zw walkZone) {
+func nsecWalkInsert(tableMap TableMap, stmtMap StmtMap, zw *walkZone) {
 	zoneID := zw.id
 
 	for rrName, rrtL := range zw.rrTypes {

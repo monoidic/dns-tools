@@ -168,10 +168,10 @@ func maybeMapper(fdChan <-chan retryWrap[fieldData, empty], refeedChan chan<- re
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(fdChan, refeedChan, outChan, msg, maybeZoneResolve, wg, retryWg)
+	resolverWorker(fdChan, refeedChan, outChan, &msg, maybeZoneResolve, wg, retryWg)
 }
 
-func maybeZoneResolve(connCache connCache, msg dns.Msg, fd *retryWrap[fieldData, empty]) (zm zoneMaybe, err error) {
+func maybeZoneResolve(connCache *connCache, msg *dns.Msg, fd *retryWrap[fieldData, empty]) (zm zoneMaybe, err error) {
 	zm.fieldData = fd.val
 	msg.Question[0].Name = dns.Fqdn(fd.val.name)
 	var response *dns.Msg

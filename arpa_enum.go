@@ -188,11 +188,11 @@ func arpaWorker(dataChan <-chan retryWrap[arpaResults, arpaResults], refeedChan 
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(dataChan, refeedChan, outChan, msg, arpaResolve, wg, retryWg)
+	resolverWorker(dataChan, refeedChan, outChan, &msg, arpaResolve, wg, retryWg)
 }
 
 // resolve .arpa PTR records
-func arpaResolve(connCache connCache, msg dns.Msg, search *retryWrap[arpaResults, arpaResults]) (results arpaResults, err error) {
+func arpaResolve(connCache *connCache, msg *dns.Msg, search *retryWrap[arpaResults, arpaResults]) (results arpaResults, err error) {
 	if search.stage == 0 {
 		search.tmp.results = make([]arpaResult, len(search.val.results))
 	}

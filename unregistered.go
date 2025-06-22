@@ -29,12 +29,12 @@ func regMapper(zoneChan <-chan retryWrap[fieldData, empty], refeedChan chan<- re
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(zoneChan, refeedChan, outChan, msg, regMap, wg, retryWg)
+	resolverWorker(zoneChan, refeedChan, outChan, &msg, regMap, wg, retryWg)
 }
 
 var regMapErr = Error{s: "regmaperr"}
 
-func regMap(connCache connCache, msg dns.Msg, zd *retryWrap[fieldData, empty]) (rs regStatus, err error) {
+func regMap(connCache *connCache, msg *dns.Msg, zd *retryWrap[fieldData, empty]) (rs regStatus, err error) {
 	zone := zd.val.name
 	msg.Question[0].Name = zone
 	registered := true

@@ -446,7 +446,7 @@ func checkUpWorker(inChan <-chan retryWrap[checkUpData, empty], refeedChan chan<
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(inChan, refeedChan, outChan, msg, checkUpResolve, wg, retryWg)
+	resolverWorker(inChan, refeedChan, outChan, &msg, checkUpResolve, wg, retryWg)
 }
 
 // `resolverWorker` wrapper to perform PTR queries
@@ -464,7 +464,7 @@ func rdnsWorker(inChan <-chan retryWrap[fieldData, empty], refeedChan chan<- ret
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(inChan, refeedChan, outChan, msg, rdnsResolve, wg, retryWg)
+	resolverWorker(inChan, refeedChan, outChan, &msg, rdnsResolve, wg, retryWg)
 }
 
 // `resolverWorker` wrapper to perform TXT queries
@@ -482,7 +482,7 @@ func txtWorker(inChan <-chan retryWrap[fieldData, empty], refeedChan chan<- retr
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(inChan, refeedChan, outChan, msg, txtResolve, wg, retryWg)
+	resolverWorker(inChan, refeedChan, outChan, &msg, txtResolve, wg, retryWg)
 }
 
 // `resolverWorker` wrapper to perform Chaosnet TXT queries
@@ -499,7 +499,7 @@ func chaosTXTWorker(inChan <-chan retryWrap[fieldData, chaosResults], refeedChan
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(inChan, refeedChan, outChan, msg, chaosTXTResolve, wg, retryWg)
+	resolverWorker(inChan, refeedChan, outChan, &msg, chaosTXTResolve, wg, retryWg)
 }
 
 // `resolverWorker` wrapper to perform NS queries on a parent zone for glue records
@@ -516,7 +516,7 @@ func parentNSResolverWorker(inChan <-chan retryWrap[zoneIP, empty], refeedChan c
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(inChan, refeedChan, outChan, msg, parentNsResolve, wg, retryWg)
+	resolverWorker(inChan, refeedChan, outChan, &msg, parentNsResolve, wg, retryWg)
 }
 
 // `resolverWorker` wrapper to query for arbitrary name:rrtype pairs received from NSEC walking results
@@ -533,11 +533,11 @@ func nsecWalkResultResolver(inChan <-chan retryWrap[rrDBData, empty], refeedChan
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(inChan, refeedChan, outChan, msg, nsecWalkResultResolve, wg, retryWg)
+	resolverWorker(inChan, refeedChan, outChan, &msg, nsecWalkResultResolve, wg, retryWg)
 }
 
 // `processsData` function
-func nsecWalkResultResolve(connCache connCache, msg dns.Msg, rrD *retryWrap[rrDBData, empty]) (res nsecWalkResolveRes, err error) {
+func nsecWalkResultResolve(connCache *connCache, msg *dns.Msg, rrD *retryWrap[rrDBData, empty]) (res nsecWalkResolveRes, err error) {
 	msg.Question[0].Name = rrD.val.rrName.name
 	msg.Question[0].Qtype = dns.StringToType[rrD.val.rrType.name]
 	res.rrDBData = rrD.val
@@ -570,7 +570,7 @@ func nsecWalkResultResolve(connCache connCache, msg dns.Msg, rrD *retryWrap[rrDB
 }
 
 // `processsData` function
-func nsResolve(connCache connCache, msg dns.Msg, fd *retryWrap[fieldData, empty]) (rrR rrResults[dns.NS], err error) {
+func nsResolve(connCache *connCache, msg *dns.Msg, fd *retryWrap[fieldData, empty]) (rrR rrResults[dns.NS], err error) {
 	msg.Question[0].Name = dns.Fqdn(fd.val.name)
 	var response *dns.Msg
 	rrR.fieldData = fd.val
@@ -593,7 +593,7 @@ func nsResolve(connCache connCache, msg dns.Msg, fd *retryWrap[fieldData, empty]
 }
 
 // `processsData` function
-func mxResolve(connCache connCache, msg dns.Msg, fd *retryWrap[fieldData, empty]) (mxd mxData, err error) {
+func mxResolve(connCache *connCache, msg *dns.Msg, fd *retryWrap[fieldData, empty]) (mxd mxData, err error) {
 	msg.Question[0].Name = dns.Fqdn(fd.val.name)
 	var response *dns.Msg
 	var results []dns.MX
@@ -620,7 +620,7 @@ func mxResolve(connCache connCache, msg dns.Msg, fd *retryWrap[fieldData, empty]
 }
 
 // `processsData` function
-func addrResolve(connCache connCache, msg dns.Msg, fd *retryWrap[fieldData, addrData]) (ad addrData, err error) {
+func addrResolve(connCache *connCache, msg *dns.Msg, fd *retryWrap[fieldData, addrData]) (ad addrData, err error) {
 	msg.Question[0].Name = dns.Fqdn(fd.val.name)
 
 	qTypes := []uint16{dns.TypeA, dns.TypeAAAA}
@@ -665,7 +665,7 @@ func addrResolve(connCache connCache, msg dns.Msg, fd *retryWrap[fieldData, addr
 }
 
 // `processsData` function
-func parentCheckResolve(connCache connCache, msg dns.Msg, cpIn *retryWrap[childParent, empty]) (cp childParent, err error) {
+func parentCheckResolve(connCache *connCache, msg *dns.Msg, cpIn *retryWrap[childParent, empty]) (cp childParent, err error) {
 	cp = cpIn.val
 
 	msg.Question[0].Name = cp.parentGuess
@@ -701,7 +701,7 @@ parentCheckSOALoop:
 }
 
 // `processsData` function
-func checkUpResolve(connCache connCache, msg dns.Msg, cuIn *retryWrap[checkUpData, empty]) (cu checkUpData, err error) {
+func checkUpResolve(connCache *connCache, msg *dns.Msg, cuIn *retryWrap[checkUpData, empty]) (cu checkUpData, err error) {
 	cu = cuIn.val
 	msg.Question[0].Name = dns.Fqdn(cu.zone)
 	cu.registered = true
@@ -716,7 +716,7 @@ func checkUpResolve(connCache connCache, msg dns.Msg, cuIn *retryWrap[checkUpDat
 }
 
 // `processsData` function
-func rdnsResolve(connCache connCache, msg dns.Msg, fd *retryWrap[fieldData, empty]) (rrR rrResults[dns.PTR], err error) {
+func rdnsResolve(connCache *connCache, msg *dns.Msg, fd *retryWrap[fieldData, empty]) (rrR rrResults[dns.PTR], err error) {
 	if addr, err := dns.ReverseAddr(fd.val.name); err == nil {
 		msg.Question[0].Name = addr
 	} else {
@@ -746,7 +746,7 @@ func rdnsResolve(connCache connCache, msg dns.Msg, fd *retryWrap[fieldData, empt
 }
 
 // `processsData` function
-func txtResolve(connCache connCache, msg dns.Msg, fd *retryWrap[fieldData, empty]) (fdR fdResults, err error) {
+func txtResolve(connCache *connCache, msg *dns.Msg, fd *retryWrap[fieldData, empty]) (fdR fdResults, err error) {
 	msg.Question[0].Name = dns.Fqdn(fd.val.name)
 	var results []string
 	var res *dns.Msg
@@ -769,7 +769,7 @@ func txtResolve(connCache connCache, msg dns.Msg, fd *retryWrap[fieldData, empty
 	return
 }
 
-func chaosTXTResolve(connCache connCache, msg dns.Msg, fd *retryWrap[fieldData, chaosResults]) (cr chaosResults, err error) {
+func chaosTXTResolve(connCache *connCache, msg *dns.Msg, fd *retryWrap[fieldData, chaosResults]) (cr chaosResults, err error) {
 	nameserver := net.JoinHostPort(fd.val.name, "53")
 
 	for i := fd.stage; i < len(chaosTXTNames); i++ {
@@ -808,7 +808,7 @@ func chaosTXTResolve(connCache connCache, msg dns.Msg, fd *retryWrap[fieldData, 
 }
 
 // `processsData` function
-func parentNsResolve(connCache connCache, msg dns.Msg, fdr *retryWrap[zoneIP, empty]) (pr parentNSResults, err error) {
+func parentNsResolve(connCache *connCache, msg *dns.Msg, fdr *retryWrap[zoneIP, empty]) (pr parentNSResults, err error) {
 	msg.Question[0].Name = dns.Fqdn(fdr.val.zone.name)
 
 	nameserver := net.JoinHostPort(fdr.val.ip.name, "53")
@@ -858,7 +858,7 @@ func nsResolverWorker(dataChan <-chan retryWrap[fieldData, empty], refeedChan ch
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(dataChan, refeedChan, outChan, msg, nsResolve, wg, retryWg)
+	resolverWorker(dataChan, refeedChan, outChan, &msg, nsResolve, wg, retryWg)
 }
 
 // `resolverWorker` wrapper to perform MX queries
@@ -876,7 +876,7 @@ func mxResolverWorker(dataChan <-chan retryWrap[fieldData, empty], refeedChan ch
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(dataChan, refeedChan, outChan, msg, mxResolve, wg, retryWg)
+	resolverWorker(dataChan, refeedChan, outChan, &msg, mxResolve, wg, retryWg)
 }
 
 // `resolverWorker` wrapper to perform A/AAAA queries
@@ -893,7 +893,7 @@ func addrResolverWorker(dataChan <-chan retryWrap[fieldData, addrData], refeedCh
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(dataChan, refeedChan, outChan, msg, addrResolve, wg, retryWg)
+	resolverWorker(dataChan, refeedChan, outChan, &msg, addrResolve, wg, retryWg)
 }
 
 // `resolverWorker` wrapper to query for zone parents
@@ -911,5 +911,5 @@ func parentCheckWorker(dataChan <-chan retryWrap[childParent, empty], refeedChan
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(dataChan, refeedChan, outChan, msg, parentCheckResolve, wg, retryWg)
+	resolverWorker(dataChan, refeedChan, outChan, &msg, parentCheckResolve, wg, retryWg)
 }
