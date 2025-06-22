@@ -635,7 +635,7 @@ func addrResolve(connCache *connCache, msg *dns.Msg, fd *retryWrap[fieldData, ad
 		if err != nil {
 			if fd.retriesLeft == 0 {
 				// try next qtype
-				fd.retriesLeft = RETRIES
+				fd.retriesLeft = retries
 				err = nil
 				continue
 			}
@@ -782,7 +782,7 @@ func chaosTXTResolve(connCache *connCache, msg *dns.Msg, fd *retryWrap[fieldData
 		if err != nil {
 			if fd.retriesLeft == 0 {
 				// skip to next entry
-				fd.retriesLeft = RETRIES
+				fd.retriesLeft = retries
 				err = nil
 				continue
 			}

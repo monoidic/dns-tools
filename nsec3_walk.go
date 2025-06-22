@@ -392,7 +392,7 @@ func nsec3ParamQuery(connCache *connCache, zone string) *dns.NSEC3PARAM {
 	msgSetSize(&msg)
 	msg.Extra[0].(*dns.OPT).SetDo()
 
-	for range RETRIES {
+	for range retries {
 		res, err := plainResolveRandom(&msg, connCache)
 		if err != nil {
 			continue
@@ -426,7 +426,7 @@ func nsec3Query(connCache *connCache, name string) *dns.Msg {
 	msgSetSize(&msg)
 	msg.Extra[0].(*dns.OPT).SetDo()
 
-	for range RETRIES {
+	for range retries {
 		res, err := plainResolveRandom(&msg, connCache)
 		if err == nil && res.Rcode != dns.RcodeServerFailure {
 			return res

@@ -268,7 +268,7 @@ func connCacheLoader(client *dns.Client, proto string) ttlcache.Option[string, *
 		var conn *dns.Conn
 		var err error
 
-		for range RETRIES {
+		for range retries {
 			if conn, err = client.Dial(host); err == nil {
 				break
 			}
@@ -399,7 +399,7 @@ func resolverWorker[inType, resultType, tmpType any](dataChan <-chan retryWrap[i
 		startStage := fd.stage
 		result, err := processData(connCache, msg, &fd)
 		if fd.stage != startStage {
-			fd.retriesLeft = RETRIES
+			fd.retriesLeft = retries
 		}
 		if err == nil || fd.retriesLeft == 0 {
 			outChan <- result
@@ -494,7 +494,7 @@ func retryWrapper[inType, resultType any](seq iter.Seq[inType], retryChan chan<-
 			wg.Add(1)
 			retryChan <- retryWrap[inType, resultType]{
 				val:         val,
-				retriesLeft: RETRIES,
+				retriesLeft: retries,
 			}
 		}
 	}()

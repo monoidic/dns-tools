@@ -10,6 +10,7 @@ type conf struct {
 	AxfrWhitelistedZones []string
 	AxfrWhitelistedIPs   []string
 	SplitSize            int
+	Retries              int
 }
 
 var (
@@ -20,14 +21,17 @@ var (
 	splitSize              int
 )
 
-var globalConf conf
-
 // read config and populate global variables
 func readConfig() {
+	var globalConf conf
 	b := check1(os.ReadFile("conf.json"))
 
 	check(json.Unmarshal(b, &globalConf))
 	usedNs = globalConf.Ns
+	retries = globalConf.Retries
+	if retries == 0 {
+		retries = 10
+	}
 	usedNsLen = len(usedNs)
 	splitSize = globalConf.SplitSize
 	if globalConf.SplitSize == 0 {

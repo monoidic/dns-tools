@@ -207,7 +207,7 @@ func arpaResolve(connCache *connCache, msg *dns.Msg, search *retryWrap[arpaResul
 		if err != nil {
 			if search.retriesLeft == 0 {
 				// skip to next
-				search.retriesLeft = RETRIES
+				search.retriesLeft = retries
 				err = nil
 			} else {
 				return

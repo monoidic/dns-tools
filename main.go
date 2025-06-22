@@ -13,7 +13,6 @@ import (
 )
 
 const (
-	RETRIES   = 5
 	BUFLEN    = 10_000
 	MIDBUFLEN = 100
 	CHUNKSIZE = 100_000
@@ -28,6 +27,7 @@ var (
 	networksFile string
 	netCC        string
 	numProcs     int
+	retries      int
 )
 
 func check(err error) {

@@ -211,7 +211,7 @@ func nsecWalkerResolve(name string, connCache *connCache) *dns.Msg {
 	msgSetSize(&msg)
 	msg.Extra[0].(*dns.OPT).SetDo()
 
-	for range RETRIES {
+	for range retries {
 		res, err := plainResolveRandom(&msg, connCache)
 		if err == nil {
 			return res

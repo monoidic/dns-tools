@@ -85,7 +85,7 @@ func axfrWorker(zipChan <-chan zoneIP, rrDataChan chan<- rrData, wg *sync.WaitGr
 		msg.Question[0].Name = zone
 
 	axfrRetryLoop:
-		for range RETRIES {
+		for range retries {
 			if err := performAxfr(msg, rrDataChan, ns); err == nil {
 				// timeScanned := now.UTC().Format("2006/01/02 15:04")
 				rrDataChan <- rrData{
