@@ -9,7 +9,6 @@ type conf struct {
 	Ns                   []string
 	AxfrWhitelistedZones []string
 	AxfrWhitelistedIPs   []string
-	SplitSize            int
 	Retries              int
 }
 
@@ -18,7 +17,6 @@ var (
 	usedNsLen              int
 	AxfrWhitelistedZoneSet = make(Set[string])
 	AxfrWhitelistedIPSet   = make(Set[string])
-	splitSize              int
 )
 
 // read config and populate global variables
@@ -33,10 +31,6 @@ func readConfig() {
 		retries = 10
 	}
 	usedNsLen = len(usedNs)
-	splitSize = globalConf.SplitSize
-	if globalConf.SplitSize == 0 {
-		splitSize = 2
-	}
 
 	for _, zone := range globalConf.AxfrWhitelistedZones {
 		AxfrWhitelistedZoneSet.Add(zone)

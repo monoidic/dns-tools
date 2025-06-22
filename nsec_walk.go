@@ -394,7 +394,7 @@ func _getMiddle(zone string, rn rangeset.RangeEntry[string]) iter.Seq[[]string] 
 
 		// TODO could run up against the limit of 255 bytes per name
 		splitALen := max(20, min(63, 2+max(startLen, endLen)))
-		for splitS := range splitAscii(startNum, endNum, splitSize, splitALen) {
+		for splitS := range splitAscii(startNum, endNum, 2, splitALen) {
 			res := append([]string{splitS}, common...)
 			if !yield(res) {
 				return
