@@ -26,7 +26,7 @@ type walkZone struct {
 	mux        *sync.Mutex
 }
 
-func addKnown(zone string, rs *rangeset.RangeSet[string], rn rangeset.RangeEntry[string], bitmap []uint16, rrTypes map[string][]string) bool {
+func addKnown(zone string, rs *rangeset.RangeSet[string], rn rangeset.RangeEntry[string], bitmap []uint16, rrTypes map[string][]string, mux *sync.Mutex) bool {
 	if !dns.IsSubDomain(zone, rn.Start) {
 		return false
 	}
@@ -44,7 +44,10 @@ func addKnown(zone string, rs *rangeset.RangeSet[string], rn rangeset.RangeEntry
 		}
 	}
 
+	mux.Lock()
 	rrTypes[rn.Start] = nsecTypes
+	mux.Unlock()
+
 	rs.Add(rn)
 
 	return true
@@ -119,7 +122,7 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[string]) {
 				continue
 			}
 
-			var foundSubdomains bool
+			var subdomains []string
 
 			for _, rr := range msg.Ns {
 				switch rrT := rr.(type) {
@@ -127,15 +130,25 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[string]) {
 					normalizeRR(rrT)
 					if soaZone := rrT.Hdr.Name; dnsCompare(zone, soaZone) != 0 && dns.IsSubDomain(zone, soaZone) {
 						// fmt.Printf("found subdomain %s of domain %s\n", soaZone, zone)
-						wz.mux.Lock()
-						wz.subdomains.Add(soaZone)
-						wz.mux.Unlock()
-						foundSubdomains = true
+						subdomains = append(subdomains, soaZone)
+					}
+				case *dns.RRSIG:
+					normalizeRR(rrT)
+					if rrsigZone := rrT.SignerName; dnsCompare(zone, rrsigZone) != 0 && dns.IsSubDomain(zone, rrsigZone) {
+						// fmt.Printf("found subdomain %s of domain %s\n", soaZone, zone)
+						subdomains = append(subdomains, rrsigZone)
 					}
 				}
 			}
 
-			if foundSubdomains {
+			if len(subdomains) > 0 {
+				/*
+					wz.mux.Lock()
+					for _, subdomain := range subdomains {
+						wz.subdomains.Add(subdomain)
+					}
+					wz.mux.Unlock()
+				*/
 				continue
 			}
 
@@ -144,12 +157,10 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[string]) {
 				switch rrT := rr.(type) {
 				case *dns.NSEC:
 					normalizeRR(rrT)
-					wz.mux.Lock()
-					if addKnown(zone, &knownRanges, rangeset.RangeEntry[string]{Start: rrT.Hdr.Name, End: rrT.NextDomain}, rrT.TypeBitMap, wz.rrTypes) {
+					if addKnown(zone, &knownRanges, rangeset.RangeEntry[string]{Start: rrT.Hdr.Name, End: rrT.NextDomain}, rrT.TypeBitMap, wz.rrTypes, wz.mux) {
 						// fmt.Printf("added entry %v\n", rrT)
 						expanded = true
 					}
-					wz.mux.Unlock()
 				}
 			}
 
@@ -372,6 +383,17 @@ func _getMiddle(zone string, rn rangeset.RangeEntry[string]) iter.Seq[[]string] 
 			}
 		}
 
+		if len(splitEnd) > 0 {
+			last := splitEnd[0]
+			if last[len(last)-1] == '-' {
+				last = last[:len(last)-1] + ","
+				res := append([]string{last}, common...)
+				if !yield(res) {
+					return
+				}
+			}
+		}
+
 		startNum := big.NewInt(0)
 		endNum := big.NewInt(0)
 		endNum.SetString(maxLabelNum, 10)
@@ -398,6 +420,17 @@ func _getMiddle(zone string, rn rangeset.RangeEntry[string]) iter.Seq[[]string] 
 			res := append([]string{splitS}, common...)
 			if !yield(res) {
 				return
+			}
+		}
+
+		if len(splitStartCopy) < len(splitEndCopy) && dns.IsSubDomain(start, end) {
+			startNum := big.NewInt(0)
+			endNum := labelToNum(splitEndCopy[commonLabels])
+			for splitS := range splitAscii(startNum, endNum, 2, 20) {
+				res := append([]string{splitS}, common...)
+				if !yield(res) {
+					return
+				}
 			}
 		}
 	}
