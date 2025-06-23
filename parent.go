@@ -20,7 +20,7 @@ func nameParents(name string) []string {
 	name = dns.Fqdn(name)
 
 	if name == "." {
-		return []string{}
+		return nil
 	}
 
 	var idx []int

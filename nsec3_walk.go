@@ -97,6 +97,7 @@ type nsec3WalkZone struct {
 	knownRanges rangeset.RangeSet[Nsec3Hash]
 	rrTypes     map[Nsec3Hash][]string
 	salt        []byte
+	mux         *sync.RWMutex
 	iterations  int
 }
 
@@ -498,6 +499,7 @@ func nsec3WalkResolve(connCache *connCache, _ *dns.Msg, zd *retryWrap[fieldData,
 		id:          zd.val.id,
 		rrTypes:     make(map[Nsec3Hash][]string),
 		knownRanges: rangeset.RangeSet[Nsec3Hash]{Compare: nsec3Compare},
+		mux:         &sync.RWMutex{},
 	}
 
 	// fmt.Printf("starting walk on zone %s\n", zone)
@@ -516,9 +518,48 @@ func nsec3WalkResolve(connCache *connCache, _ *dns.Msg, zd *retryWrap[fieldData,
 	off := check1(dns.PackDomainName(wz.zone, encodedZone, 0, nil, false))
 	encodedZone = encodedZone[:off]
 
+	producedGuesses := make(chan hashEntry, MIDBUFLEN)
+	filteredGuesses := make(chan hashEntry, MIDBUFLEN)
+	doneCh := make(chan empty)
+
+	// producer
+	go func() {
+		defer close(producedGuesses)
+		for guess := range genHashesWrap(encodedZone, wz.salt, wz.iterations) {
+			select {
+			case <-doneCh:
+				return
+			case producedGuesses <- guess:
+			}
+		}
+	}()
+
+	var wg sync.WaitGroup
+	wg.Add(numProcs)
+	closeChanWait(&wg, filteredGuesses)
+
+	for range numProcs {
+		go func() {
+			defer wg.Done()
+			for guess := range producedGuesses {
+				wz.mux.RLock()
+				contains := wz.contains(guess.hash)
+				wz.mux.RUnlock()
+
+				if !contains {
+					filteredGuesses <- guess
+				}
+			}
+		}()
+
+	}
+
 hashLoop:
-	for guess := range genHashesWrap(encodedZone, wz.salt, wz.iterations) {
-		if wz.contains(guess.hash) {
+	for guess := range filteredGuesses {
+		wz.mux.RLock()
+		contains := wz.contains(guess.hash)
+		wz.mux.RUnlock()
+		if contains {
 			continue
 		}
 
@@ -541,6 +582,9 @@ hashLoop:
 
 		var sawThis bool
 
+		var entries []rangeset.RangeEntry[Nsec3Hash]
+		var bitmaps [][]uint16
+
 		for _, rr := range res.Ns {
 			switch rrT := rr.(type) {
 			case *dns.NSEC3:
@@ -560,9 +604,17 @@ hashLoop:
 					return nsec3WalkZone{}, errors.New("nsec3 white lies?")
 				}
 
-				wz.addKnown(rangeset.RangeEntry[Nsec3Hash]{Start: start, End: end}, rrT.TypeBitMap)
+				entries = append(entries, rangeset.RangeEntry[Nsec3Hash]{Start: start, End: end})
+				bitmaps = append(bitmaps, rrT.TypeBitMap)
 			}
 		}
+
+		wz.mux.Lock()
+		for i, entry := range entries {
+			bitmap := bitmaps[i]
+			wz.addKnown(entry, bitmap)
+		}
+		wz.mux.Unlock()
 
 		if !sawThis {
 			fmt.Printf("expected to see something covering hashName=%s hash=%s did not\n", hashName, guess.hash)
@@ -597,6 +649,8 @@ hashLoop:
 			}
 		}
 	}
+
+	close(doneCh)
 
 	return wz, nil
 }
