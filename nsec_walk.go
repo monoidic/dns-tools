@@ -142,13 +142,11 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[string]) {
 			}
 
 			if len(subdomains) > 0 {
-				/*
-					wz.mux.Lock()
-					for _, subdomain := range subdomains {
-						wz.subdomains.Add(subdomain)
-					}
-					wz.mux.Unlock()
-				*/
+				wz.mux.Lock()
+				for _, subdomain := range subdomains {
+					wz.subdomains.Add(subdomain)
+				}
+				wz.mux.Unlock()
 				continue
 			}
 
