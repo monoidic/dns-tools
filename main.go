@@ -50,8 +50,6 @@ type flagData struct {
 var flags = map[string]*flagData{
 	"parse_lists":       {description: "parse domain lists under lists/", function: parseDomainLists},
 	"parse":             {description: "parse zone files under zones/", function: parseZoneFiles},
-	"arpa_v4":           {description: "enumerate in-addr.arpa nameservers", function: recurseArpaV4},
-	"arpa_v6":           {description: "enumerate ip6.arpa nameservers", function: recurseArpaV6},
 	"rr_ns":             {description: "extract zone-ns relations from parsed RRs", function: extractNSRR},
 	"rr_ip":             {description: "extract name-ip relations from parsed RRs", function: extractIPRR},
 	"rr_mx":             {description: "extract name-mx relations from parsed RRs", function: extractMXRR},

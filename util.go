@@ -5,7 +5,9 @@ import (
 	"iter"
 	"math/big"
 	"math/rand"
+	"net/netip"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -348,4 +350,24 @@ func priorityChanGen[T any]() (inLow, inHigh, out chan T, stop func()) {
 	}()
 
 	return inLow, inHigh, out, stop
+}
+
+var ptrV6Pattern = regexp.MustCompile("....")
+
+// convert full-length PTR name (v4 or v6), e.g 4.3.2.1.in-addr.arpa, to the netip.Addr for the corresponding IP address (1.2.3.4 for the given example)
+func ptrToIP(s string) (netip.Addr, error) {
+	if strings.HasSuffix(s, ".ip6.arpa.") {
+		s = s[:len(s)-len(".ip6.arpa.")]
+		s = strings.ReplaceAll(s, ".", "")
+		s = reverseASCII(s)
+		s = strings.Join(ptrV6Pattern.FindAllString(s, -1), ":")
+	} else if strings.HasSuffix(s, ".in-addr.arpa.") {
+		s = s[:len(s)-len(".in-addr.arpa.")]
+		l := strings.Split(s, ".")
+		slices.Reverse(l)
+		s = strings.Join(l, ".")
+	} else {
+		return netip.Addr{}, Error{s: fmt.Sprintf("invalid addr: %q", s)}
+	}
+	return netip.ParseAddr(s)
 }
