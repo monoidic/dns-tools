@@ -215,13 +215,6 @@ INSERT OR IGNORE INTO nsec_state (id, name) VALUES
 (5, 'nsec_confusion'),
 (6, 'secure_nsec3'  );
 
-CREATE TABLE IF NOT EXISTS unwalked_root
-(
-    id      INTEGER PRIMARY KEY,
-    name    TEXT UNIQUE NOT NULL,
-    ent     INTEGER NOT NULL DEFAULT FALSE
-);
-
 CREATE TABLE IF NOT EXISTS chaos_query
 (
     id      INTEGER PRIMARY KEY,

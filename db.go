@@ -363,50 +363,6 @@ func getUnqueriedNsecRes(db *sql.DB) iter.Seq[rrDBData] {
 	}
 }
 
-func getUnqueriedArpaRoots(db *sql.DB) (iter.Seq[fieldData], bool) {
-	tx := check1(db.Begin())
-	rows := check1(tx.Query(`
-		SELECT id, name
-		FROM unwalked_root
-	`))
-
-	defer func() {
-		check(rows.Close())
-		check(tx.Commit())
-	}()
-
-	anyResponses := rows.Next()
-	// do this silly dance to get anyResponses to indicate lack of responses before accessing iterator
-	return func(yield func(fieldData) bool) {
-		if anyResponses {
-			var fd fieldData
-			check(rows.Scan(&fd.id, &fd.name))
-			if !yield(fd) {
-				return
-			}
-			for rows.Next() {
-				check(rows.Scan(&fd.id, &fd.name))
-				if !yield(fd) {
-					break
-				}
-			}
-		}
-	}, anyResponses
-}
-
-func readerWriterRecurse[inType any](msg string, db *sql.DB, readerF readerRecurseF[inType], writerF writerF[inType]) {
-	fmt.Println(msg)
-
-	seq, anyResponses := readerF(db)
-	for anyResponses {
-		writerF(db, seq)
-		seq, anyResponses = readerF(db)
-	}
-
-	_, stop := iter.Pull(seq)
-	stop()
-}
-
 func extractNSRR(db *sql.DB) {
 	readerWriter("extracting NS results from RR", db, getZone2RR("rr_type.name='NS'", db), insertNSRR)
 }

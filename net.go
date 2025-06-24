@@ -18,7 +18,6 @@ type (
 	tableWorkerF[inType, resultType, tmpType any]     func(dataChan <-chan retryWrap[inType, tmpType], refeedChan chan<- retryWrap[inType, tmpType], outChan chan<- resultType, wg, retryWg *sync.WaitGroup, tableMap TableMap, stmtMap StmtMap)
 	netWorkerF[inType, resultType, tmpType any]       func(dataChan <-chan retryWrap[inType, tmpType], refeedChan chan<- retryWrap[inType, tmpType], outChan chan<- resultType, wg, retryWg *sync.WaitGroup)
 	insertF[resultType any]                           func(tableMap TableMap, stmtMap StmtMap, datum resultType)
-	readerRecurseF[inType any]                        func(db *sql.DB) (iter.Seq[inType], bool)
 	writerF[inType any]                               func(db *sql.DB, seq iter.Seq[inType])
 	processDataF[inType any, resultType, tmpType any] func(c *connCache, msg *dns.Msg, fd *retryWrap[inType, tmpType]) (resultType, error)
 )
