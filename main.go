@@ -81,10 +81,10 @@ var flags = map[string]*flagData{
 var (
 	flagOrder = []string{
 		"parse", "parse_lists",
+		"check_up",
 		"rr_ns", "rr_mx", "rr_ip", "rr_ptr",
 		"net_ns", "net_mx", "net_ip", "net_ptr",
 		"zone_ns_ip", "zone_ns_ip_glue",
-		"check_up",
 		"nsec_map", "zone_walk", "nsec3_walk", "zone_walk_results",
 		"axfr", "psl", "validate", "parent_map", "parent_ns",
 		"unregistered", "spf", "spf_links",

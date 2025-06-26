@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"slices"
 	"unsafe"
 
@@ -49,10 +50,8 @@ func initOpenclInfo() {
 
 var openclDevice *cl.OpenCLDevice
 
-func nsec3HashOpenCL(zone, salt []byte, iterations int) (ch <-chan hashEntry, cancel func()) {
+func nsec3HashOpenCL(ctx context.Context, zone, salt []byte, iterations int) <-chan hashEntry {
 	outCh := make(chan hashEntry, MIDBUFLEN)
-	cancelCh := make(chan empty)
-	cancel = func() { close(cancelCh) }
 
 	device := openclDevice
 	runner := check1(device.InitRunner())
@@ -102,12 +101,12 @@ func nsec3HashOpenCL(zone, salt []byte, iterations int) (ch <-chan hashEntry, ca
 
 				select {
 				case outCh <- entry:
-				case <-cancelCh:
+				case <-ctx.Done():
 					return
 				}
 			}
 		}
 	}()
 
-	return outCh, cancel
+	return outCh
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"database/sql"
 	"encoding/base32"
@@ -140,12 +141,6 @@ func (wz *nsec3WalkZone) sizeKnown() *big.Int {
 	}
 
 	return total
-}
-
-func (wz *nsec3WalkZone) sizeUnKnown() *big.Int {
-	known := wz.sizeKnown()
-	all := nsec3Total()
-	return all.Sub(all, known)
 }
 
 func (wz *nsec3WalkZone) percentDiscovered() string {
@@ -296,26 +291,23 @@ func genHashes(zone, salt []byte, iterations int) iter.Seq[hashEntry] {
 	}
 }
 
-func genHashesMulti(zone, salt []byte, iterations int) (ch <-chan hashEntry, cancel func()) {
+func genHashesMulti(ctx context.Context, zone, salt []byte, iterations int) <-chan hashEntry {
 	out := make(chan hashEntry, MIDBUFLEN)
 	var wg sync.WaitGroup
 
-	doneCh := make(chan empty)
+	wg.Add(numProcs)
 
-	cancel = func() {
-		close(doneCh)
+	go func() {
 		wg.Wait()
 		close(out)
-	}
-
-	wg.Add(numProcs)
+	}()
 
 	for range numProcs {
 		go func() {
 			for {
 				for e := range genHashes(zone, salt, iterations) {
 					select {
-					case <-doneCh:
+					case <-ctx.Done():
 						wg.Done()
 						return
 					case out <- e:
@@ -325,36 +317,32 @@ func genHashesMulti(zone, salt []byte, iterations int) (ch <-chan hashEntry, can
 		}()
 	}
 
-	return out, cancel
+	return out
 }
 
 const MULTITHREAD_NSEC3_THRESHOLD = 2
 
 // chooses single-threaded or multi-threaded genHashes variant based on iteration number
-func genHashesWrap(zone, salt []byte, iterations int) iter.Seq[hashEntry] {
+func genHashesWrap(ctx context.Context, zone, salt []byte, iterations int) iter.Seq[hashEntry] {
 	if !noCL && openclDevice == nil {
 		initOpenclInfo()
 	}
 
-	if !noCL {
-		ch, cancel := nsec3HashOpenCL(zone, salt, iterations)
-		return func(yield func(hashEntry) bool) {
-			defer cancel()
-			for e := range ch {
-				if !yield(e) {
-					return
-				}
-			}
-		}
-
-	}
-
-	if iterations < MULTITHREAD_NSEC3_THRESHOLD {
+	if noCL && iterations < MULTITHREAD_NSEC3_THRESHOLD {
 		return genHashes(zone, salt, iterations)
 	}
 
+	ctx, cancel := context.WithCancel(ctx)
+
+	var ch <-chan hashEntry
+
+	if noCL {
+		ch = genHashesMulti(ctx, zone, salt, iterations)
+	} else {
+		ch = nsec3HashOpenCL(ctx, zone, salt, iterations)
+	}
+
 	return func(yield func(hashEntry) bool) {
-		ch, cancel := genHashesMulti(zone, salt, iterations)
 		defer cancel()
 		for e := range ch {
 			if !yield(e) {
@@ -520,14 +508,15 @@ func nsec3WalkResolve(connCache *connCache, _ *dns.Msg, zd *retryWrap[fieldData,
 
 	producedGuesses := make(chan hashEntry, MIDBUFLEN)
 	filteredGuesses := make(chan hashEntry, MIDBUFLEN)
-	doneCh := make(chan empty)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	// producer
 	go func() {
 		defer close(producedGuesses)
-		for guess := range genHashesWrap(encodedZone, wz.salt, wz.iterations) {
+		for guess := range genHashesWrap(ctx, encodedZone, wz.salt, wz.iterations) {
 			select {
-			case <-doneCh:
+			case <-ctx.Done():
 				return
 			case producedGuesses <- guess:
 			}
@@ -538,6 +527,7 @@ func nsec3WalkResolve(connCache *connCache, _ *dns.Msg, zd *retryWrap[fieldData,
 	wg.Add(numProcs)
 	closeChanWait(&wg, filteredGuesses)
 
+	// filters
 	for range numProcs {
 		go func() {
 			defer wg.Done()
@@ -649,8 +639,6 @@ hashLoop:
 			}
 		}
 	}
-
-	close(doneCh)
 
 	return wz, nil
 }

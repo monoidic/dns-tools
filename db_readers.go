@@ -49,7 +49,9 @@ func getUnqueriedChaosTXT(db *sql.DB) iter.Seq[fieldData] {
 	filter := fmt.Sprintf(`
 		SELECT address, id
 		FROM ip
-		WHERE ch_resolved=FALSE %s
+		WHERE ch_resolved=FALSE
+		AND ip.responsive=TRUE
+		%s
 	`, v4Filter)
 
 	return getDbFieldData(filter, db)
@@ -101,6 +103,7 @@ func zoneNsIpParentReader(db *sql.DB) iter.Seq[zoneIP] {
 		INNER JOIN name_ip ON name_ip.name_id=zone_ns.ns_id 
 		INNER JOIN ip ON name_ip.ip_id = ip.id
 		WHERE zone.is_zone=TRUE AND parent.is_zone=TRUE
+		AND ip.responsive=TRUE
 	`
 
 		tx := check1(db.Begin())
@@ -127,6 +130,7 @@ func parentNSReader(db *sql.DB) iter.Seq[zoneIP] {
 		INNER JOIN name AS zone ON zone_ns_ip_glue.zone_id=zone.id
 		INNER JOIN ip ON zone_ns_ip_glue.ip_id=ip.id
 		WHERE zone_ns_ip_glue.fetched=FALSE
+		AND ip.responsive=TRUE
 	`
 
 		tx := check1(db.Begin())
