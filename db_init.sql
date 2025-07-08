@@ -194,6 +194,7 @@ CREATE TABLE IF NOT EXISTS zone_nsec_state
     nsec_state_id   INTEGER NOT NULL REFERENCES nsec_state(id),
     rname_id        INTEGER NOT NULL REFERENCES rname(id),
     mname_id        INTEGER NOT NULL REFERENCES mname(id),
+    opt_out         INTEGER NOT NULL DEFAULT FALSE, -- whether or not nsec3 uses opt-out for unsigned delegations
     nsec            TEXT NOT NULL
 );
 

@@ -10,6 +10,16 @@ import (
 	"github.com/miekg/dns"
 )
 
+type nsecMapResults struct {
+	zoneID    int64
+	success   bool
+	nsecState string
+	rname     string
+	mname     string
+	nsecS     string
+	optout    bool
+}
+
 const (
 	hasNsec uint = 1 << iota
 	hasNsec3
@@ -20,7 +30,7 @@ func shortZone(rrT *dns.NSEC3) bool {
 	return start == end
 }
 
-func getNsecState(nsecSigs []dns.NSEC, nsec3Sigs []dns.NSEC3) (string, string) {
+func getNsecState(nsecSigs []*dns.NSEC, nsec3Sigs []*dns.NSEC3) (string, string, bool) {
 	var nsecT uint
 	var nsecS string
 
@@ -36,7 +46,7 @@ func getNsecState(nsecSigs []dns.NSEC, nsec3Sigs []dns.NSEC3) (string, string) {
 
 	switch nsecT {
 	case 0: // no nsec
-		return "", ""
+		return "", "", false
 	case hasNsec: // regular nsec
 		nsecType := "plain_nsec"
 		for _, rr := range nsecSigs {
@@ -51,20 +61,24 @@ func getNsecState(nsecSigs []dns.NSEC, nsec3Sigs []dns.NSEC3) (string, string) {
 			nsecSArr = append(nsecSArr, rr.Hdr.Name+"^"+rr.NextDomain)
 		}
 		nsecS = strings.Join(nsecSArr, "|")
-		return nsecType, nsecS
+		return nsecType, nsecS, false
 
 	case hasNsec3:
 		nsecType := "nsec3"
-		shortZone := len(nsec3Sigs) == 1 && shortZone(&nsec3Sigs[0])
+		shortZone := len(nsec3Sigs) == 1 && shortZone(nsec3Sigs[0])
+		var optOut bool
 		for _, rrT := range nsec3Sigs {
-			start, end := nsec3RRToHashes(&rrT)
+			start, end := nsec3RRToHashes(rrT)
 			if !shortZone && labelDiffSmall(start, end) {
 				nsecType = "secure_nsec3"
 			}
 			nsecSArr = append(nsecSArr, fmt.Sprintf("%s^%s", start, end))
+			if rrT.Flags&1 == 1 {
+				optOut = true
+			}
 		}
 		nsecS = strings.Join(nsecSArr, "|")
-		return nsecType, nsecS
+		return nsecType, nsecS, optOut
 
 	default: // both nsec and nsec3?
 		var prefix []string
@@ -82,7 +96,7 @@ func getNsecState(nsecSigs []dns.NSEC, nsec3Sigs []dns.NSEC3) (string, string) {
 			prefix = append(prefix, "nsec3")
 			builder := make([]string, 0, len(nsec3Sigs))
 			for _, rr := range nsec3Sigs {
-				start, end := nsec3RRToHashes(&rr)
+				start, end := nsec3RRToHashes(rr)
 				builder = append(builder, fmt.Sprintf("%s^%s", start, end))
 			}
 			suffix = append(suffix, strings.Join(builder, "|"))
@@ -92,11 +106,11 @@ func getNsecState(nsecSigs []dns.NSEC, nsec3Sigs []dns.NSEC3) (string, string) {
 
 		nsecS = strings.Join(nsecSArr, "&")
 
-		return "nsec_confusion", nsecS
+		return "nsec_confusion", nsecS, false
 	}
 }
 
-func checkNsecWorker(dataChan <-chan retryWrap[fieldData, empty], refeedChan chan<- retryWrap[fieldData, empty], outChan chan<- fdResults, wg, retryWg *sync.WaitGroup) {
+func checkNsecWorker(dataChan <-chan retryWrap[fieldData, empty], refeedChan chan<- retryWrap[fieldData, empty], outChan chan<- nsecMapResults, wg, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -105,7 +119,7 @@ func checkNsecWorker(dataChan <-chan retryWrap[fieldData, empty], refeedChan cha
 		},
 		Question: []dns.Question{{
 			Qclass: dns.ClassINET,
-			Qtype:  dns.TypeAPL,
+			Qtype:  dns.TypeCNAME,
 		}},
 	}
 	msgSetSize(&msg)
@@ -125,9 +139,12 @@ func zoneRandomName(zone string) string {
 	return ret
 }
 
-func checkNsecQuery(connCache *connCache, msg *dns.Msg, fd *retryWrap[fieldData, empty]) (fdr fdResults, err error) {
+func checkNsecQuery(connCache *connCache, msg *dns.Msg, fd *retryWrap[fieldData, empty]) (nmr nsecMapResults, err error) {
 	var nsecState, rname, mname, nsecS string
+	var optOut bool
 	var res *dns.Msg
+
+	nmr.zoneID = fd.val.id
 
 	msg.Question[0].Name = zoneRandomName(fd.val.name)
 
@@ -136,23 +153,22 @@ func checkNsecQuery(connCache *connCache, msg *dns.Msg, fd *retryWrap[fieldData,
 		return
 	}
 
-	var nsecSigs []dns.NSEC
-	var nsec3Sigs []dns.NSEC3
+	var nsecSigs []*dns.NSEC
+	var nsec3Sigs []*dns.NSEC3
 
 	for _, rr := range res.Ns { // authority section
 		switch rrT := rr.(type) {
 		case *dns.NSEC:
-			nsecSigs = append(nsecSigs, *rrT)
+			nsecSigs = append(nsecSigs, rrT)
 		case *dns.NSEC3:
-			nsec3Sigs = append(nsec3Sigs, *rrT)
+			nsec3Sigs = append(nsec3Sigs, rrT)
 		}
 	}
 
-	nsecState, nsecS = getNsecState(nsecSigs, nsec3Sigs)
+	nsecState, nsecS, optOut = getNsecState(nsecSigs, nsec3Sigs)
 
 	if nsecState == "" { // no nsec/nsec3/nsec3param
 		// fmt.Printf("continue 2: no nsec info for %s\n", fd.name)
-		fdr = fdResults{fieldData: fd.val}
 		return
 	}
 
@@ -171,7 +187,7 @@ soaLoop:
 	if !soaFound {
 		msg.Question[0].Qtype = dns.TypeSOA
 		dnssecL := msg.Extra
-		msg.Extra = []dns.RR{}
+		msg.Extra = nil
 
 		res, err = plainResolveRandom(msg, connCache)
 		if err != nil {
@@ -195,12 +211,19 @@ soaLoop:
 
 		if !soaFound { // unable to find SOA, skip
 			// fmt.Printf("continue 3: unable to get SOA for %s\n", fd.name)
-			fdr = fdResults{fieldData: fd.val}
 			return
 		}
 	}
 
-	fdr = fdResults{fieldData: fd.val, results: []string{nsecState, rname, mname, nsecS}}
+	nmr = nsecMapResults{
+		zoneID:    fd.val.id,
+		success:   true,
+		nsecState: nsecState,
+		rname:     rname,
+		mname:     mname,
+		nsecS:     nsecS,
+		optout:    optOut,
+	}
 	return
 }
 
@@ -211,26 +234,27 @@ func checkNsecMaster(db *sql.DB, seq iter.Seq[fieldData]) {
 		"mname":      "name",
 	}
 	namesStmts := map[string]string{
-		"insert": "INSERT INTO zone_nsec_state (zone_id, nsec_state_id, rname_id, mname_id, nsec) VALUES (?, ?, ?, ?, ?)",
+		"insert": "INSERT INTO zone_nsec_state (zone_id, nsec_state_id, rname_id, mname_id, nsec, opt_out) VALUES (?, ?, ?, ?, ?, ?)",
 		"update": "UPDATE name SET nsec_mapped=TRUE WHERE id=?",
 	}
 
 	netWriter(db, seq, tablesFields, namesStmts, checkNsecWorker, checkNsecInsert)
 }
 
-func checkNsecInsert(tableMap TableMap, stmtMap StmtMap, fd fdResults) {
-	zoneID := fd.id
+func checkNsecInsert(tableMap TableMap, stmtMap StmtMap, nmr nsecMapResults) {
+	zoneID := nmr.zoneID
 
-	if len(fd.results) != 0 { // fetch failure
-		nsecStateID := tableMap.roGet("nsec_state", fd.results[0])
-		rnameID := tableMap.get("rname", fd.results[1])
-		mnameID := tableMap.get("mname", fd.results[2])
-		nsecS := fd.results[3]
+	defer stmtMap.exec("update", zoneID)
 
-		stmtMap.exec("insert", zoneID, nsecStateID, rnameID, mnameID, nsecS)
+	if !nmr.success { // fetch failure
+		return
 	}
 
-	stmtMap.exec("update", zoneID)
+	nsecStateID := tableMap.roGet("nsec_state", nmr.nsecState)
+	rnameID := tableMap.get("rname", nmr.rname)
+	mnameID := tableMap.get("mname", nmr.mname)
+
+	stmtMap.exec("insert", zoneID, nsecStateID, rnameID, mnameID, nmr.nsecS, nmr.optout)
 }
 
 func checkNsec(db *sql.DB) {

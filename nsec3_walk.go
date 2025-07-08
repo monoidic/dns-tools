@@ -407,7 +407,7 @@ func nsec3Query(connCache *connCache, name string) *dns.Msg {
 		},
 		Question: []dns.Question{{
 			Qclass: dns.ClassINET,
-			Qtype:  dns.TypeAPL,
+			Qtype:  dns.TypeCNAME,
 			Name:   name,
 		}},
 	}

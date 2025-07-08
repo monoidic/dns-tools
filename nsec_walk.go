@@ -212,7 +212,7 @@ func nsecWalkerResolve(name string, connCache *connCache) *dns.Msg {
 		},
 		Question: []dns.Question{{
 			Qclass: dns.ClassINET,
-			Qtype:  dns.TypeAPL,
+			Qtype:  dns.TypeCNAME,
 			Name:   name,
 		}},
 	}
