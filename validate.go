@@ -103,7 +103,7 @@ func validInsert(tableMap TableMap, stmtMap StmtMap, zv zoneValid) {
 	stmtMap.exec("maybe_zone", etldp1ID)
 }
 
-func getTLDs(yield func(string) bool) {
+func getTLDs(yield func(dns.Name) bool) {
 	fp := check1(os.Open("misc/tld.txt"))
 
 	scanner := bufio.NewScanner(fp)
@@ -118,7 +118,7 @@ func getTLDs(yield func(string) bool) {
 			s = s[1:]
 		}
 
-		if !yield(s) {
+		if !yield(mustParseName(s)) {
 			break
 		}
 	}
@@ -126,7 +126,7 @@ func getTLDs(yield func(string) bool) {
 	check(fp.Close())
 }
 
-func tldListWriter(db *sql.DB, seq iter.Seq[string]) {
+func tldListWriter(db *sql.DB, seq iter.Seq[dns.Name]) {
 	tablesFields := map[string]string{
 		"name": "name",
 	}
@@ -137,8 +137,8 @@ func tldListWriter(db *sql.DB, seq iter.Seq[string]) {
 	insertRR(db, seq, tablesFields, namesStmts, tldListInsert)
 }
 
-func tldListInsert(tableMap TableMap, stmtMap StmtMap, tld string) {
-	tldID := tableMap.get("name", tld)
+func tldListInsert(tableMap TableMap, stmtMap StmtMap, tld dns.Name) {
+	tldID := tableMap.get("name", tld.String())
 	stmtMap.exec("maybe_zone", tldID)
 }
 

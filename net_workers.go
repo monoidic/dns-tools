@@ -274,7 +274,9 @@ func zoneIPReader(db *sql.DB) iter.Seq[zoneIP] {
 
 		for rows.Next() {
 			var zip zoneIP
-			check(rows.Scan(&zip.zone.name, &zip.ip.name))
+			var zoneName string
+			check(rows.Scan(&zoneName, &zip.ip.name))
+			zip.zone.name = mustParseName(zoneName)
 			zip.ip.name = net.JoinHostPort(zip.ip.name, "53")
 			if !yield(zip) {
 				break

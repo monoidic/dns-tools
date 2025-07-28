@@ -96,7 +96,9 @@ func zoneNsIpReader(db *sql.DB) iter.Seq[zoneIP] {
 
 		for rows.Next() {
 			var zip zoneIP
-			check(rows.Scan(&zip.zone.name, &zip.ip.name, &zip.zone.id, &zip.ip.id))
+			var zoneName string
+			check(rows.Scan(&zoneName, &zip.ip.name, &zip.zone.id, &zip.ip.id))
+			zip.zone.name = mustParseName(zoneName)
 			if !yield(zip) {
 				break
 			}
@@ -125,7 +127,9 @@ func zoneNsIpParentReader(db *sql.DB) iter.Seq[zoneIP] {
 
 		for rows.Next() {
 			var zip zoneIP
-			check(rows.Scan(&zip.zone.name, &zip.ip.name, &zip.zone.id, &zip.ip.id))
+			var zoneName string
+			check(rows.Scan(&zoneName, &zip.ip.name, &zip.zone.id, &zip.ip.id))
+			zip.zone.name = mustParseName(zoneName)
 			if !yield(zip) {
 				break
 			}
@@ -152,7 +156,9 @@ func parentNSReader(db *sql.DB) iter.Seq[zoneIP] {
 
 		for rows.Next() {
 			var zip zoneIP
-			check(rows.Scan(&zip.zone.name, &zip.ip.name, &zip.zone.id, &zip.ip.id))
+			var zoneName string
+			check(rows.Scan(&zoneName, &zip.ip.name, &zip.zone.id, &zip.ip.id))
+			zip.zone.name = mustParseName(zoneName)
 			if !yield(zip) {
 				break
 			}
