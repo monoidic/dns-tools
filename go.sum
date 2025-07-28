@@ -8,8 +8,8 @@ github.com/jellydator/ttlcache/v3 v3.4.0 h1:YS4P125qQS0tNhtL6aeYkheEaB/m8HCqdMMP
 github.com/jellydator/ttlcache/v3 v3.4.0/go.mod h1:Hw9EgjymziQD3yGsQdf1FqFdpp7YjFMd4Srg5EJlgD4=
 github.com/mattn/go-sqlite3 v1.14.29 h1:1O6nRLJKvsi1H2Sj0Hzdfojwt8GiGKm+LOfLaBFaouQ=
 github.com/mattn/go-sqlite3 v1.14.29/go.mod h1:Uh1q+B4BYcTPb+yiD3kU8Ct7aC0hY9fxUwlHK0RXw+Y=
-github.com/monoidic/dns v1.1.69 h1:X7Ib3iEGOBoS9lpcNXBVvEQfT2g7gd9Xye8+bxszyK0=
-github.com/monoidic/dns v1.1.69/go.mod h1:S4Yh/snMVUXtBFlxSGLZrkOikXPapGRItAoWkAbuTqE=
+github.com/monoidic/dns v1.1.70 h1:eJy0tg7TdybDErjkhzzxujhSYmoKvjairHkbywJ+jTY=
+github.com/monoidic/dns v1.1.70/go.mod h1:S4Yh/snMVUXtBFlxSGLZrkOikXPapGRItAoWkAbuTqE=
 github.com/monoidic/rangeset v0.0.0-20240518201828-b04bb4bbbf23 h1:C8JnL+VBh3b3qo4M6TaSkJjsCxnr317xDb5THZAi2+M=
 github.com/monoidic/rangeset v0.0.0-20240518201828-b04bb4bbbf23/go.mod h1:sMBefMSiMzUq/n5SjdFRsvpbprlMEdfxq39l6UvG8vw=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
