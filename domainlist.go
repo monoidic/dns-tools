@@ -6,14 +6,13 @@ import (
 	"io/fs"
 	"iter"
 	"os"
-	"strings"
 	"sync"
 
 	"github.com/monoidic/dns"
 )
 
 // parse domain list files
-func readDomainLists(fileChan <-chan string, domainChan chan<- string, wg *sync.WaitGroup) {
+func readDomainLists(fileChan <-chan string, domainChan chan<- dns.Name, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for filename := range fileChan {
 		fp := check1(os.Open(filename))
@@ -21,7 +20,7 @@ func readDomainLists(fileChan <-chan string, domainChan chan<- string, wg *sync.
 		scanner := bufio.NewScanner(fp)
 
 		for scanner.Scan() {
-			s := dns.Fqdn(strings.ToLower(scanner.Text()))
+			s := mustParseName(dns.Fqdn(scanner.Text())).Canonical()
 			domainChan <- s
 		}
 
@@ -29,7 +28,7 @@ func readDomainLists(fileChan <-chan string, domainChan chan<- string, wg *sync.
 	}
 }
 
-func insertDomainWorker(db *sql.DB, seq iter.Seq[string]) {
+func insertDomainWorker(db *sql.DB, seq iter.Seq[dns.Name]) {
 	tablesFields := map[string]string{
 		"name": "name",
 	}
@@ -40,8 +39,8 @@ func insertDomainWorker(db *sql.DB, seq iter.Seq[string]) {
 	insertRR(db, seq, tablesFields, namesStmts, domainInsert)
 }
 
-func domainInsert(tableMap TableMap, stmtMap StmtMap, domain string) {
-	nameID := tableMap.get("name", domain)
+func domainInsert(tableMap TableMap, stmtMap StmtMap, domain dns.Name) {
+	nameID := tableMap.get("name", domain.String())
 
 	stmtMap.exec("maybe_zone", nameID)
 }
@@ -55,7 +54,7 @@ func parseDomainLists(db *sql.DB) {
 	}
 
 	fileChan := make(chan string, BUFLEN)
-	domainChan := make(chan string, BUFLEN)
+	domainChan := make(chan dns.Name, BUFLEN)
 
 	go func(matches []string) {
 		for _, match := range matches {

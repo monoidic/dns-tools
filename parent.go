@@ -69,7 +69,7 @@ func addChildParent(seq iter.Seq[nameData]) iter.Seq[childParent] {
 
 func parentCheckWriter(tableMap TableMap, stmtMap StmtMap, res childParent) {
 	defer stmtMap.exec("mapped", res.child.id)
-	if res.resolved && res.parentGuess.EncodedLen() != 0 {
+	if !(res.resolved && res.parentGuess.EncodedLen() != 0) {
 		return
 	}
 	parentID := res.parent.id

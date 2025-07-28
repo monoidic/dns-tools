@@ -22,7 +22,7 @@ const (
 )
 
 type zoneValid struct {
-	fieldData // child zone
+	nameData  // child zone
 	eTLDplus1 string
 	status    tldStatus
 }
@@ -34,17 +34,18 @@ type zoneMaybe struct {
 	nxdomain bool
 }
 
-func validMapper(zoneChan <-chan retryWrap[fieldData, empty], refeedChan chan<- retryWrap[fieldData, empty], outChan chan<- zoneValid, wg, retryWg *sync.WaitGroup) {
+func validMapper(zoneChan <-chan retryWrap[nameData, empty], refeedChan chan<- retryWrap[nameData, empty], outChan chan<- zoneValid, wg, retryWg *sync.WaitGroup) {
 	defer wg.Done()
 	for zdw := range zoneChan {
 		zd := zdw.val
-		if zd.name == "." {
-			outChan <- zoneValid{fieldData: zd, status: icannTLD, eTLDplus1: "."}
+		if zd.name.String() == "." {
+			outChan <- zoneValid{nameData: zd, status: icannTLD, eTLDplus1: "."}
 			retryWg.Done()
 			continue
 		}
 
-		dotless := zd.name[:len(zd.name)-1]
+		dotless := zd.name.String()
+		dotless = dotless[:len(dotless)-1]
 		eTLD, icann := publicsuffix.PublicSuffix(dotless)
 		var status tldStatus
 		eTLDplus1 := "."
@@ -70,12 +71,12 @@ func validMapper(zoneChan <-chan retryWrap[fieldData, empty], refeedChan chan<- 
 			}
 		}
 
-		outChan <- zoneValid{fieldData: zd, status: status, eTLDplus1: dns.Fqdn(eTLDplus1)}
+		outChan <- zoneValid{nameData: zd, status: status, eTLDplus1: dns.Fqdn(eTLDplus1)}
 		retryWg.Done()
 	}
 }
 
-func validWriter(db *sql.DB, seq iter.Seq[fieldData]) {
+func validWriter(db *sql.DB, seq iter.Seq[nameData]) {
 	tablesFields := map[string]string{
 		"name": "name",
 	}
@@ -216,7 +217,7 @@ func insertPSL(db *sql.DB) {
 }
 
 func validateZones(db *sql.DB) {
-	readerWriter("validating zones", db, getDbFieldData(`
+	readerWriter("validating zones", db, getDbNameData(`
 	SELECT name, id
 	FROM name AS zone
 	WHERE valid_tried=FALSE

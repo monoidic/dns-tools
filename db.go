@@ -317,12 +317,14 @@ func getZone2RR(filter string, db *sql.DB) iter.Seq[rrDBData] {
 
 		for rows.Next() {
 			var ad rrDBData
+			var rrName string
 			check(rows.Scan(
 				&ad.id, &ad.fromParent, &ad.fromSelf,
 				&ad.rrType.name, &ad.rrType.id,
-				&ad.rrName.name, &ad.rrName.id,
+				&rrName, &ad.rrName.id,
 				&ad.rrValue.name, &ad.rrValue.id,
 			))
+			ad.rrName.name = mustParseName(rrName)
 			if !yield(ad) {
 				break
 			}
@@ -349,11 +351,13 @@ func getUnqueriedNsecRes(db *sql.DB) iter.Seq[rrDBData] {
 
 		for rows.Next() {
 			rrD := rrDBData{fromSelf: true}
+			var rrName string
 			check(rows.Scan(
 				&rrD.rrValue.id, &rrD.id,
-				&rrD.rrName.name, &rrD.rrName.id,
+				&rrName, &rrD.rrName.id,
 				&rrD.rrType.name, &rrD.rrType.id,
 			))
+			rrD.rrName.name = mustParseName(rrName)
 			if !yield(rrD) {
 				break
 			}
