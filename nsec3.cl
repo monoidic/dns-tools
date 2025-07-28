@@ -32,8 +32,8 @@ def_memcpy(glbl_to_priv, __private, __global)
 } nsec3_inbuf;
 
 typedef struct { // 83 bytes
-  uchar hash[20];
-  uchar name_buf[63];
+  char hash[20];
+  char name_buf[63];
 } nsec3_outbuf;
 //////////////////////////////// END ME
 
@@ -215,8 +215,6 @@ void SHA1Transform(uint *state, const char *buffer) {
   state[2] += c;
   state[3] += d;
   state[4] += e;
-  /* Wipe variables */
-  a = b = c = d = e = 0;
 }
 
 /* SHA1Init - Initialize new context */
@@ -234,9 +232,7 @@ void SHA1Init(SHA1_CTX *context) {
 /* Run your data through this. */
 
 void SHA1Update(SHA1_CTX *context, const char *data, uint len) {
-  uint i;
-
-  uint j;
+  uint i, j;
 
   j = context->count[0];
   if ((context->count[0] += len << 3) < j) {
@@ -244,7 +240,9 @@ void SHA1Update(SHA1_CTX *context, const char *data, uint len) {
   }
   context->count[1] += (len >> 29);
   j = (j >> 3) & 63;
-  if ((j + len) > 63) {
+  if ((j + len) <= 63) {
+    i = 0;
+  } else {
     i = 64 - j;
     for (int ii = 0; ii < i; ii++) {
       context->buffer[j + ii] = data[ii];
@@ -254,8 +252,6 @@ void SHA1Update(SHA1_CTX *context, const char *data, uint len) {
       SHA1Transform(context->state, &data[i]);
     }
     j = 0;
-  } else {
-    i = 0;
   }
 
   for (int ii = 0; ii < len - i; ii++) {
@@ -296,10 +292,10 @@ void SHA1Final(SHA1_CTX *context) {
                255); /* Endian independent */
   }
 #endif
-  c = 0200;
+  c = 0x80;
   SHA1Update(context, &c, 1);
-  while ((context->count[0] & 504) != 448) {
-    c = 0000;
+  while ((context->count[0] & 0x1f8) != 0x1c0) {
+    c = 0x00;
     SHA1Update(context, &c, 1);
   }
   SHA1Update(context, finalcount, 8); /* Should cause a SHA1Transform() */
@@ -315,10 +311,11 @@ void SHA1Final(SHA1_CTX *context) {
 
 def_digest(priv, __private) def_digest(glbl, __global)
 
-    __constant uchar nsec3walkcharset[36] = {
-        '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b',
-        'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n',
-        'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z'};
+    __constant
+    char nsec3walkcharset[36] = {'0', '1', '2', '3', '4', '5', '6', '7', '8',
+                                 '9', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h',
+                                 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q',
+                                 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z'};
 
 __kernel void nsec3_main(__global const nsec3_inbuf *inbuffer,
                          __global nsec3_outbuf *outbuffer) {
@@ -375,6 +372,6 @@ __kernel void nsec3_main(__global const nsec3_inbuf *inbuffer,
     }
   }
 
-  SHA1Digest_glbl(&ctx, (__global char *)outbuffer[idx].hash);
+  SHA1Digest_glbl(&ctx, outbuffer[idx].hash);
   memcpy_priv_to_glbl(outbuffer[idx].name_buf, namebuf + 1, labellen);
 }

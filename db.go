@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jellydator/ttlcache/v3"
+	"github.com/monoidic/dns"
 )
 
 type rrF[rrType any] func(tableMap TableMap, stmtMap StmtMap, rrD rrType)
@@ -39,10 +40,10 @@ const (
 )
 
 type rrData struct {
-	zone    string
+	zone    dns.Name
 	rrValue string
 	rrType  string
-	rrName  string
+	rrName  dns.Name
 	ip      string
 
 	msgtype
@@ -65,7 +66,7 @@ type TableMap struct {
 type rrDBData struct {
 	id         int64
 	rrType     fieldData
-	rrName     fieldData
+	rrName     nameData
 	rrValue    fieldData
 	fromParent bool
 	fromSelf   bool

@@ -6,16 +6,16 @@ import (
 	"iter"
 	"sync"
 
-	"github.com/miekg/dns"
+	"github.com/monoidic/dns"
 )
 
 type regStatus struct {
-	zone       string
+	zone       dns.Name
 	id         int64
 	registered bool
 }
 
-func regMapper(zoneChan <-chan retryWrap[fieldData, empty], refeedChan chan<- retryWrap[fieldData, empty], outChan chan<- regStatus, wg, retryWg *sync.WaitGroup) {
+func regMapper(zoneChan <-chan retryWrap[nameData, empty], refeedChan chan<- retryWrap[nameData, empty], outChan chan<- regStatus, wg, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -34,7 +34,7 @@ func regMapper(zoneChan <-chan retryWrap[fieldData, empty], refeedChan chan<- re
 
 var regMapErr = Error{s: "regmaperr"}
 
-func regMap(connCache *connCache, msg *dns.Msg, zd *retryWrap[fieldData, empty]) (rs regStatus, err error) {
+func regMap(connCache *connCache, msg *dns.Msg, zd *retryWrap[nameData, empty]) (rs regStatus, err error) {
 	zone := zd.val.name
 	msg.Question[0].Name = zone
 	registered := true
@@ -61,7 +61,7 @@ func regMap(connCache *connCache, msg *dns.Msg, zd *retryWrap[fieldData, empty])
 	return
 }
 
-func detectUnregisteredDomains(db *sql.DB, seq iter.Seq[fieldData]) {
+func detectUnregisteredDomains(db *sql.DB, seq iter.Seq[nameData]) {
 	tablesFields := map[string]string{}
 	namesStmts := map[string]string{
 		"update": "UPDATE name SET reg_checked=TRUE, registered=? WHERE id=?",
@@ -75,7 +75,7 @@ func unregisteredWrite(_ TableMap, stmtMap StmtMap, reg regStatus) {
 }
 
 func getUnregisteredDomains(db *sql.DB) {
-	readerWriter("finding unregistered domains", db, getDbFieldData(`
+	readerWriter("finding unregistered domains", db, getDbNameData(`
 	SELECT name, id
 	FROM name
 	WHERE reg_checked=FALSE

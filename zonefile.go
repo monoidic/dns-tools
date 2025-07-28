@@ -6,14 +6,14 @@ import (
 	"io/fs"
 	"os"
 	"regexp"
-	"strings"
 	"sync"
 
-	"github.com/miekg/dns"
+	"github.com/monoidic/dns"
 )
 
 type zoneData struct {
-	zone, filename string
+	zone     dns.Name
+	filename string
 }
 
 func readZonefiles(zoneDataChan <-chan zoneData, rrDataChan chan<- rrData, wg *sync.WaitGroup) {
@@ -23,7 +23,6 @@ func readZonefiles(zoneDataChan <-chan zoneData, rrDataChan chan<- rrData, wg *s
 		fp := check1(os.Open(filename))
 
 		zp := dns.NewZoneParser(fp, zoneName, filename)
-		zoneLower := strings.ToLower(zoneName)
 
 		for rr, running := zp.Next(); running; rr, running = zp.Next() {
 			switch rr.(type) {
@@ -31,12 +30,12 @@ func readZonefiles(zoneDataChan <-chan zoneData, rrDataChan chan<- rrData, wg *s
 				continue
 			}
 
-			normalizeRR(rr)
+			dns.Canonicalize(rr)
 			rrValue := rr.String()
 			header := rr.Header()
 
 			rrD := rrData{
-				zone:       zoneLower,
+				zone:       zoneName,
 				rrValue:    rrValue,
 				rrType:     dns.TypeToString[header.Rrtype],
 				rrName:     header.Name,
@@ -48,7 +47,7 @@ func readZonefiles(zoneDataChan <-chan zoneData, rrDataChan chan<- rrData, wg *s
 		}
 
 		rrDataChan <- rrData{
-			zone:    zoneLower,
+			zone:    zoneName,
 			msgtype: rrDataZoneDone,
 		}
 
@@ -72,7 +71,7 @@ func parseZoneFiles(db *sql.DB) {
 	go func(matches []string) {
 		for _, match := range matches {
 			reMatch := pattern.FindAllStringSubmatch(match, 1)
-			zone := reMatch[0][1]
+			zone := mustParseName(reMatch[0][1]).Canonical()
 
 			zoneDataChan <- zoneData{filename: match, zone: zone}
 		}

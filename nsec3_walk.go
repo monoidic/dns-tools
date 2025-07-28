@@ -17,7 +17,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/miekg/dns"
+	"github.com/monoidic/dns"
 	"github.com/monoidic/rangeset"
 )
 
@@ -37,8 +37,9 @@ func labelToNsec3Hash(label string) Nsec3Hash {
 }
 
 func nsec3RRToHashes(rrT *dns.NSEC3) (Nsec3Hash, Nsec3Hash) {
-	start := labelToNsec3Hash(dns.SplitDomainName(rrT.Hdr.Name)[0])
-	end := labelToNsec3Hash(rrT.NextDomain)
+	var end Nsec3Hash
+	start := labelToNsec3Hash(rrT.Hdr.Name.SplitRaw()[0])
+	copy(end.H[:], rrT.NextDomain.Raw())
 
 	return start, end
 }
@@ -93,7 +94,7 @@ var nsec3HashEnd = Nsec3Hash{H: [20]byte{
 }}
 
 type nsec3WalkZone struct {
-	zone        string
+	zone        dns.Name
 	id          int64
 	knownRanges rangeset.RangeSet[Nsec3Hash]
 	rrTypes     map[Nsec3Hash][]string
@@ -159,11 +160,11 @@ type hashEntry struct {
 	hash  Nsec3Hash
 }
 
-func (wz *nsec3WalkZone) addKnown(rn rangeset.RangeEntry[Nsec3Hash], bitmap []uint16) bool {
+func (wz *nsec3WalkZone) addKnown(rn rangeset.RangeEntry[Nsec3Hash], bitmap dns.TypeBitMap) bool {
 	if bytes.Compare(rn.Start.H[:], rn.End.H[:]) != -1 {
 		// wraparound
 		ret := wz.addKnown(rangeset.RangeEntry[Nsec3Hash]{Start: rn.Start, End: nsec3HashEnd}, bitmap)
-		wz.addKnown(rangeset.RangeEntry[Nsec3Hash]{Start: nsec3HashStart, End: rn.End}, nil)
+		wz.addKnown(rangeset.RangeEntry[Nsec3Hash]{Start: nsec3HashStart, End: rn.End}, dns.TypeBitMap{})
 		return ret
 	}
 
@@ -179,7 +180,7 @@ func (wz *nsec3WalkZone) addKnown(rn rangeset.RangeEntry[Nsec3Hash], bitmap []ui
 	}
 
 	var nsecTypes []string
-	for _, t := range bitmap {
+	for t := range bitmap.Iter {
 		switch t {
 		case dns.TypeNSEC3, dns.TypeRRSIG: // skip
 		default:
@@ -228,10 +229,21 @@ func randomLabel() []byte {
 	return ret
 }
 
+func randomLabelLen(min, max int) []byte {
+	length := rangeRandNum(min, max)
+	ret := make([]byte, length+1)
+	ret[0] = byte(length)
+	for i := range length {
+		ret[i+1] = byte(nsec3walkcharset[rand.IntN(len(nsec3walkcharset))])
+	}
+	return ret
+}
+
 func rangeRandNum(minV, maxV int) int {
 	diff := maxV - minV
 	return minV + rand.IntN(diff)
 }
+
 func nRandNums(minV, maxV, n int) []int {
 	ret := make([]int, n)
 
@@ -353,7 +365,7 @@ func genHashesWrap(ctx context.Context, zone, salt []byte, iterations int) iter.
 }
 
 func nsec3Walk(db *sql.DB) {
-	readerWriter("performing NSEC3 walks", db, getDbFieldData(`
+	readerWriter("performing NSEC3 walks", db, getDbNameData(`
 	SELECT DISTINCT zone.name, zone.id
 	FROM name AS zone
 	INNER JOIN zone_nsec_state ON zone_nsec_state.zone_id = zone.id
@@ -364,7 +376,7 @@ func nsec3Walk(db *sql.DB) {
 `, db), nsec3WalkMaster)
 }
 
-func nsec3ParamQuery(connCache *connCache, zone string) *dns.NSEC3PARAM {
+func nsec3ParamQuery(connCache *connCache, zone dns.Name) *dns.NSEC3PARAM {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -398,7 +410,7 @@ func nsec3ParamQuery(connCache *connCache, zone string) *dns.NSEC3PARAM {
 	return nil
 }
 
-func nsec3Query(connCache *connCache, name string) *dns.Msg {
+func nsec3Query(connCache *connCache, name dns.Name) *dns.Msg {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -425,7 +437,7 @@ func nsec3Query(connCache *connCache, name string) *dns.Msg {
 	return nil
 }
 
-func nsec3WalkMaster(db *sql.DB, seq iter.Seq[fieldData]) {
+func nsec3WalkMaster(db *sql.DB, seq iter.Seq[nameData]) {
 	tablesFields := map[string]string{
 		"name":    "name",
 		"rr_type": "name",
@@ -442,7 +454,7 @@ func nsec3WalkMaster(db *sql.DB, seq iter.Seq[fieldData]) {
 	netWriter(db, seq, tablesFields, namesStmts, nsec3WalkWorker, nsec3WalkInsert)
 }
 
-func nsec3WalkWorker(zoneChan <-chan retryWrap[fieldData, empty], refeedChan chan<- retryWrap[fieldData, empty], dataOutChan chan<- nsec3WalkZone, wg, retryWg *sync.WaitGroup) {
+func nsec3WalkWorker(zoneChan <-chan retryWrap[nameData, empty], refeedChan chan<- retryWrap[nameData, empty], dataOutChan chan<- nsec3WalkZone, wg, retryWg *sync.WaitGroup) {
 	resolverWorker(zoneChan, refeedChan, dataOutChan, &dns.Msg{}, nsec3WalkResolve, wg, retryWg)
 }
 
@@ -481,7 +493,7 @@ const (
 
 var minDiff = big.NewInt(MIN_DIFF)
 
-func nsec3WalkResolve(connCache *connCache, _ *dns.Msg, zd *retryWrap[fieldData, empty]) (nsec3WalkZone, error) {
+func nsec3WalkResolve(connCache *connCache, _ *dns.Msg, zd *retryWrap[nameData, empty]) (nsec3WalkZone, error) {
 	wz := nsec3WalkZone{
 		zone:        zd.val.name,
 		id:          zd.val.id,
@@ -497,14 +509,11 @@ func nsec3WalkResolve(connCache *connCache, _ *dns.Msg, zd *retryWrap[fieldData,
 		return nsec3WalkZone{}, errors.New("unable to fetch NSEC3PARAM")
 	}
 
-	wz.salt = check1(hex.AppendDecode(nil, []byte(nsec3Param.Salt)))
+	wz.salt = nsec3Param.Salt.Raw()
 	wz.iterations = int(nsec3Param.Iterations)
 
-	zoneB := []byte(wz.zone)
-
-	encodedZone := make([]byte, 255)
-	off := check1(dns.PackDomainName(wz.zone, encodedZone, 0, nil, false))
-	encodedZone = encodedZone[:off]
+	encodedZone := wz.zone.ToWire()
+	splitZone := wz.zone.SplitRaw()
 
 	producedGuesses := make(chan hashEntry, MIDBUFLEN)
 	filteredGuesses := make(chan hashEntry, MIDBUFLEN)
@@ -541,7 +550,6 @@ func nsec3WalkResolve(connCache *connCache, _ *dns.Msg, zd *retryWrap[fieldData,
 				}
 			}
 		}()
-
 	}
 
 hashLoop:
@@ -553,7 +561,7 @@ hashLoop:
 			continue
 		}
 
-		hashName := string(slices.Concat(guess.label, []byte("."), zoneB))
+		hashName := check1(dns.NameFromLabels(append([]string{string(guess.label)}, splitZone...)))
 
 		res := nsec3Query(connCache, hashName)
 		if res == nil {
@@ -563,8 +571,8 @@ hashLoop:
 		for _, rr := range res.Ns {
 			switch rrT := rr.(type) {
 			case *dns.SOA:
-				normalizeRR(rrT)
-				if soaZone := rrT.Hdr.Name; dnsCompare(wz.zone, soaZone) != 0 && dns.IsSubDomain(wz.zone, soaZone) {
+				dns.Canonicalize(rrT)
+				if soaZone := rrT.Hdr.Name; dns.Compare(wz.zone, soaZone) != 0 && dns.IsSubDomain(wz.zone, soaZone) {
 					continue hashLoop
 				}
 			}
@@ -573,12 +581,12 @@ hashLoop:
 		var sawThis bool
 
 		var entries []rangeset.RangeEntry[Nsec3Hash]
-		var bitmaps [][]uint16
+		var bitmaps []dns.TypeBitMap
 
 		for _, rr := range res.Ns {
 			switch rrT := rr.(type) {
 			case *dns.NSEC3:
-				normalizeRR(rrT)
+				dns.Canonicalize(rrT)
 				if !(rrT.Salt == nsec3Param.Salt && rrT.Iterations == nsec3Param.Iterations) {
 					// params changed in the middle of the walk
 					return nsec3WalkZone{}, errors.New("nsec3 params changed")

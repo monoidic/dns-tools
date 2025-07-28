@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/miekg/dns"
+	"github.com/monoidic/dns"
 )
 
 // TODO this will end up with duplicates if some AXFR fails midway through;
@@ -39,7 +39,7 @@ func performAxfr(msg dns.Msg, rrDataChan chan<- rrData, ns string) error {
 				continue
 			}
 
-			normalizeRR(rr)
+			dns.Canonicalize(rr)
 			rrValue := rr.String()
 			header := rr.Header()
 

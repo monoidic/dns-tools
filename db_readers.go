@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"iter"
+
+	"github.com/monoidic/dns"
 )
 
 func getDbFieldData(qs string, db *sql.DB) iter.Seq[fieldData] {
@@ -24,17 +26,29 @@ func getDbFieldData(qs string, db *sql.DB) iter.Seq[fieldData] {
 	}
 }
 
+func getDbNameData(qs string, db *sql.DB) iter.Seq[nameData] {
+	return func(yield func(nameData) bool) {
+		for v := range getDbFieldData(qs, db) {
+			e := nameData{name: mustParseName(v.name), id: v.id}
+			if !yield(e) {
+				return
+			}
+		}
+	}
+}
+
 // wrapper that prepends `_dmarc.` to the name while keeping the id the same
-func getUnqueriedDMARC(db *sql.DB) iter.Seq[fieldData] {
-	return func(yield func(fieldData) bool) {
-		for fd := range getDbFieldData(`
+func getUnqueriedDMARC(db *sql.DB) iter.Seq[nameData] {
+	return func(yield func(nameData) bool) {
+		var err error
+		for fd := range getDbNameData(`
 		SELECT DISTINCT name.name, name.id
 		FROM name
 		INNER JOIN name_mx ON name_mx.name_id=name.id
 		WHERE name.dmarc_tried=FALSE
 	`, db) {
-			fd.name = "_dmarc." + fd.name
-			if !yield(fd) {
+			fd.name, err = dns.NameFromLabels(append([]string{"_dmarc"}, fd.name.SplitRaw()...))
+			if err == nil && !yield(fd) {
 				return
 			}
 		}
@@ -57,13 +71,13 @@ func getUnqueriedChaosTXT(db *sql.DB) iter.Seq[fieldData] {
 	return getDbFieldData(filter, db)
 }
 
-func netZoneReader(db *sql.DB, extraFilter string) iter.Seq[fieldData] {
+func netZoneReader(db *sql.DB, extraFilter string) iter.Seq[nameData] {
 	qs := fmt.Sprintf(`
 		SELECT zone.name, zone.id
 		FROM name AS zone
 		WHERE zone.is_zone=TRUE %s
 	`, extraFilter)
-	return getDbFieldData(qs, db)
+	return getDbNameData(qs, db)
 }
 
 func zoneNsIpReader(db *sql.DB) iter.Seq[zoneIP] {

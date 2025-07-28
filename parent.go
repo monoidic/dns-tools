@@ -4,44 +4,29 @@ import (
 	"database/sql"
 	"iter"
 
-	"github.com/miekg/dns"
+	"github.com/monoidic/dns"
 )
 
 type childParent struct {
-	child       fieldData
-	parent      fieldData
-	parentGuess string
+	child       nameData
+	parent      nameData
+	parentGuess dns.Name
 	resolved    bool
 	registered  bool
 }
 
-// modified from miekg/dns Split() to return strings and the root zone (".")
-func nameParents(name string) []string {
-	name = dns.Fqdn(name)
-
-	if name == "." {
+func nameParents(name dns.Name) []dns.Name {
+	if name == rootName {
 		return nil
 	}
 
-	var idx []int
-	off := 0
-
-	for end := false; !end; off, end = dns.NextLabel(name, off) {
-		idx = append(idx, off)
-	}
-
-	idx = append(idx, off-1)
-
-	ret := make([]string, 0, len(idx))
-	for _, i := range idx[1:] {
-		ret = append(ret, name[i:])
-	}
-
+	ret := name.SubNames()
+	ret = append(ret, rootName)
 	return ret
 }
 
 func mapZoneParents(db *sql.DB) {
-	readerWriter("mapping zone parents", db, getDbFieldData(`
+	readerWriter("mapping zone parents", db, getDbNameData(`
 	SELECT name, id
 	FROM name
 	WHERE
@@ -50,7 +35,7 @@ func mapZoneParents(db *sql.DB) {
 `, db), parentCheck)
 }
 
-func parentCheck(db *sql.DB, seq iter.Seq[fieldData]) {
+func parentCheck(db *sql.DB, seq iter.Seq[nameData]) {
 	tablesFields := map[string]string{
 		"name": "name",
 	}
@@ -66,7 +51,7 @@ func parentCheck(db *sql.DB, seq iter.Seq[fieldData]) {
 	netWriterTable(db, childParents, tablesFields, namesStmts, parentCheckWorker, parentCheckWriter)
 }
 
-func addChildParent(seq iter.Seq[fieldData]) iter.Seq[childParent] {
+func addChildParent(seq iter.Seq[nameData]) iter.Seq[childParent] {
 	return func(yield func(childParent) bool) {
 		for fd := range seq {
 			cp := childParent{child: fd}
@@ -83,21 +68,20 @@ func addChildParent(seq iter.Seq[fieldData]) iter.Seq[childParent] {
 }
 
 func parentCheckWriter(tableMap TableMap, stmtMap StmtMap, res childParent) {
-	if res.resolved && res.parentGuess != "" {
-		parentID := res.parent.id
+	defer stmtMap.exec("mapped", res.child.id)
+	if res.resolved && res.parentGuess.EncodedLen() != 0 {
+		return
+	}
+	parentID := res.parent.id
 
-		if parentID == 0 {
-			name := res.parentGuess
-			if res.registered {
-				name = res.parent.name
-			}
-			parentID = tableMap.get("name", name)
+	if parentID == 0 {
+		name := res.parentGuess
+		if res.registered {
+			name = res.parent.name
 		}
-
-		stmtMap.exec("set_zone", parentID)
-		stmtMap.exec("name_parent", parentID, res.child.id)
-
+		parentID = tableMap.get("name", name.String())
 	}
 
-	stmtMap.exec("mapped", res.child.id)
+	stmtMap.exec("set_zone", parentID)
+	stmtMap.exec("name_parent", parentID, res.child.id)
 }

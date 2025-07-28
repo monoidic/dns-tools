@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/miekg/dns"
+	"github.com/monoidic/dns"
 	"golang.org/x/net/publicsuffix"
 )
 
@@ -28,7 +28,7 @@ type zoneValid struct {
 }
 
 type zoneMaybe struct {
-	fieldData
+	nameData
 	isZone   bool
 	servfail bool
 	nxdomain bool
@@ -142,7 +142,7 @@ func tldListInsert(tableMap TableMap, stmtMap StmtMap, tld string) {
 	stmtMap.exec("maybe_zone", tldID)
 }
 
-func maybeZoneWriter(db *sql.DB, seq iter.Seq[fieldData]) {
+func maybeZoneWriter(db *sql.DB, seq iter.Seq[nameData]) {
 	tablesFields := map[string]string{
 		"name": "name",
 	}
@@ -154,7 +154,7 @@ func maybeZoneWriter(db *sql.DB, seq iter.Seq[fieldData]) {
 	netWriter(db, seq, tablesFields, namesStmts, maybeMapper, maybeInsert)
 }
 
-func maybeMapper(fdChan <-chan retryWrap[fieldData, empty], refeedChan chan<- retryWrap[fieldData, empty], outChan chan<- zoneMaybe, wg, retryWg *sync.WaitGroup) {
+func maybeMapper(fdChan <-chan retryWrap[nameData, empty], refeedChan chan<- retryWrap[nameData, empty], outChan chan<- zoneMaybe, wg, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -171,9 +171,9 @@ func maybeMapper(fdChan <-chan retryWrap[fieldData, empty], refeedChan chan<- re
 	resolverWorker(fdChan, refeedChan, outChan, &msg, maybeZoneResolve, wg, retryWg)
 }
 
-func maybeZoneResolve(connCache *connCache, msg *dns.Msg, fd *retryWrap[fieldData, empty]) (zm zoneMaybe, err error) {
-	zm.fieldData = fd.val
-	msg.Question[0].Name = dns.Fqdn(fd.val.name)
+func maybeZoneResolve(connCache *connCache, msg *dns.Msg, fd *retryWrap[nameData, empty]) (zm zoneMaybe, err error) {
+	zm.nameData = fd.val
+	msg.Question[0].Name = fd.val.name
 	var response *dns.Msg
 
 	response, err = plainResolveRandom(msg, connCache)
@@ -224,7 +224,7 @@ func validateZones(db *sql.DB) {
 }
 
 func maybeZone(db *sql.DB) {
-	readerWriter("resolving maybe-zones", db, getDbFieldData(`
+	readerWriter("resolving maybe-zones", db, getDbNameData(`
 	SELECT name.name, name.id
 	FROM name
 	WHERE name.maybe_zone=TRUE

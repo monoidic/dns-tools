@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"os"
+
+	"github.com/monoidic/dns"
 )
 
 type conf struct {
@@ -15,9 +17,13 @@ type conf struct {
 var (
 	usedNs                 []string
 	usedNsLen              int
-	AxfrWhitelistedZoneSet = make(Set[string])
+	AxfrWhitelistedZoneSet = make(Set[dns.Name])
 	AxfrWhitelistedIPSet   = make(Set[string])
 )
+
+func mustParseName(s string) dns.Name {
+	return check1(dns.NameFromString(s))
+}
 
 // read config and populate global variables
 func readConfig() {
@@ -33,7 +39,7 @@ func readConfig() {
 	usedNsLen = len(usedNs)
 
 	for _, zone := range globalConf.AxfrWhitelistedZones {
-		AxfrWhitelistedZoneSet.Add(zone)
+		AxfrWhitelistedZoneSet.Add(mustParseName(zone).Canonical())
 	}
 
 	for _, ip := range globalConf.AxfrWhitelistedIPs {

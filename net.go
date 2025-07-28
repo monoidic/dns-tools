@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/hex"
 	"fmt"
 	"iter"
 	"math/rand"
@@ -11,7 +10,7 @@ import (
 	"time"
 
 	"github.com/jellydator/ttlcache/v3"
-	"github.com/miekg/dns"
+	"github.com/monoidic/dns"
 )
 
 type (
@@ -33,14 +32,24 @@ type fieldData struct {
 	id   int64
 }
 
+type nameData struct {
+	name dns.Name
+	id   int64
+}
+
 // generic struct for an RRSET response to some query
 type rrResults[rr any] struct {
+	nameData
+	results []rr
+}
+
+type rrFdResults[rr any] struct {
 	fieldData
 	results []rr
 }
 
 type fdResults struct {
-	fieldData
+	nameData
 	results []string
 }
 
@@ -50,13 +59,13 @@ type chaosResults struct { // name:value responses may have different names than
 }
 
 type chaosResult struct {
-	queried    string
-	resultName string
+	queried    dns.Name
+	resultName dns.Name
 	value      string
 }
 
 type addrData struct {
-	fieldData
+	nameData
 	a          []dns.A
 	aaaa       []dns.AAAA
 	cname      []dns.CNAME
@@ -71,14 +80,15 @@ type parentNSResults struct {
 }
 
 type checkUpData struct {
-	ns, zone   string
+	ns         string
+	zone       dns.Name
 	ipID       int64
 	success    bool
 	registered bool
 }
 
 type zoneIP struct {
-	zone fieldData
+	zone nameData
 	ip   fieldData
 }
 
@@ -96,10 +106,10 @@ type connCache struct {
 	client      *dns.Client
 	udpCache    *ttlcache.Cache[string, *dns.Conn]
 	tcpCache    *ttlcache.Cache[string, *dns.Conn]
-	cookieCache *ttlcache.Cache[string, string]
+	cookieCache *ttlcache.Cache[string, dns.ByteField]
 }
 
-var chaosTXTNames = []string{
+var preChaosTXTNames = []string{
 	// BIND + many others
 	"version.bind.",
 	"authors.bind.",
@@ -144,6 +154,16 @@ var chaosTXTNames = []string{
 	"versio.",
 }
 
+var chaosTXTNames []dns.Name
+
+func init() {
+	chaosTXTNames = make([]dns.Name, len(preChaosTXTNames))
+
+	for i, v := range preChaosTXTNames {
+		chaosTXTNames[i] = mustParseName(v)
+	}
+}
+
 // set up a connCache
 func getConnCache() *connCache {
 	// TODO use ttlcache.WithCapacity as well?
@@ -177,9 +197,9 @@ func getConnCache() *connCache {
 }
 
 // set up a cookie cache for connCache
-func getCookieCache() *ttlcache.Cache[string, string] {
+func getCookieCache() *ttlcache.Cache[string, dns.ByteField] {
 	cookieF := cookieGen()
-	ttlOption := ttlcache.WithTTL[string, string](25 * time.Second)
+	ttlOption := ttlcache.WithTTL[string, dns.ByteField](25 * time.Second)
 	cache := ttlcache.New(cookieF, ttlOption)
 	go cache.Start()
 	return cache
@@ -195,10 +215,10 @@ func getNull[T any](cache *ttlcache.Cache[string, T], key string) T {
 }
 
 // perform DNS query to the specified hostname, using cookie and connection caches
-func exchange(hostname string, msg *dns.Msg, cookieCache *ttlcache.Cache[string, string], connCache *ttlcache.Cache[string, *dns.Conn], client *dns.Client) (*dns.Msg, error) {
+func exchange(hostname string, msg *dns.Msg, cookieCache *ttlcache.Cache[string, dns.ByteField], connCache *ttlcache.Cache[string, *dns.Conn], client *dns.Client) (*dns.Msg, error) {
 	msg.Id = dns.Id()
 
-	if cookie := getNull(cookieCache, hostname); cookie != "" {
+	if cookie := getNull(cookieCache, hostname); cookie.EncodedLen() != 0 {
 		oCookie := msgAddCookie(msg)
 		oCookie.Cookie = cookie
 	}
@@ -283,24 +303,23 @@ func connCacheLoader(client *dns.Client, proto string) ttlcache.Option[string, *
 }
 
 // return ttlcache.WithLoader to generate a random DNS client cookie for the cookie cache in connCache
-func cookieGen() ttlcache.Option[string, string] {
+func cookieGen() ttlcache.Option[string, dns.ByteField] {
 	bufRand := make([]byte, 8)
-	bufStr := make([]byte, 16)
 	oRand := rand.New(rand.NewSource(rand.Int63()))
 
-	getRandCookie := func() string {
+	getRandCookie := func() dns.ByteField {
 		oRand.Read(bufRand)
-		hex.Encode(bufStr, bufRand)
-		return string(bufStr)
+		return dns.BFFromBytes(bufRand)
 	}
 
-	return ttlcache.WithLoader(ttlcache.LoaderFunc[string, string](func(c *ttlcache.Cache[string, string], host string) *ttlcache.Item[string, string] {
+	return ttlcache.WithLoader(ttlcache.LoaderFunc[string, dns.ByteField](func(c *ttlcache.Cache[string, dns.ByteField], host string) *ttlcache.Item[string, dns.ByteField] {
 		return c.Set(host, getRandCookie(), ttlcache.DefaultTTL)
 	}))
 }
 
 // extract cookie from response message
-func cookieFromMsg(msg *dns.Msg) string {
+func cookieFromMsg(msg *dns.Msg) dns.ByteField {
+	var empty dns.ByteField
 	var optRR *dns.OPT
 
 cookieFromMsgLoop:
@@ -313,7 +332,7 @@ cookieFromMsgLoop:
 	}
 
 	if optRR == nil { // no EDNS(0) support
-		return ""
+		return empty
 	}
 
 	for _, opt := range optRR.Option {
@@ -324,7 +343,7 @@ cookieFromMsgLoop:
 	}
 
 	// cookies not supported/enabled
-	return ""
+	return empty
 }
 
 // close connCache connections on cache eviction
@@ -368,7 +387,7 @@ func setOpt(msg *dns.Msg) *dns.OPT {
 
 	opt := &dns.OPT{
 		Hdr: dns.RR_Header{
-			Name:   ".",
+			Name:   rootName,
 			Rrtype: dns.TypeOPT,
 		},
 	}
@@ -508,7 +527,7 @@ func netNS(db *sql.DB) {
 }
 
 func netIP(db *sql.DB) {
-	readerWriter("Adding name-IP mappings from the internet", db, getDbFieldData(`
+	readerWriter("Adding name-IP mappings from the internet", db, getDbNameData(`
 	SELECT name.name, id
 	FROM name
 	WHERE (is_ns=TRUE OR is_mx=TRUE) AND addr_resolved=FALSE
@@ -532,7 +551,7 @@ func rdns(db *sql.DB) {
 }
 
 func spf(db *sql.DB) {
-	readerWriter("getting potential SPF records", db, getDbFieldData(`
+	readerWriter("getting potential SPF records", db, getDbNameData(`
 	SELECT DISTINCT name.name, name.id
 	FROM name
 	INNER JOIN name_mx ON name_mx.name_id=name.id
@@ -541,7 +560,7 @@ func spf(db *sql.DB) {
 }
 
 func spfLinks(db *sql.DB) {
-	readerWriter("getting linked SPF records", db, getDbFieldData(`
+	readerWriter("getting linked SPF records", db, getDbNameData(`
 	SELECT DISTINCT name.name, name.id
 	FROM name
 	INNER JOIN spf_name ON spf_name.name_id=name.id

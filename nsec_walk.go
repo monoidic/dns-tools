@@ -10,23 +10,23 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/miekg/dns"
+	"github.com/monoidic/dns"
 	"github.com/monoidic/rangeset"
 	"golang.org/x/sync/semaphore"
 )
 
 type walkZone struct {
-	zone       string
+	zone       dns.Name
 	id         int64
-	subdomains Set[string]
-	rrTypes    map[string][]string
+	subdomains Set[dns.Name]
+	rrTypes    map[dns.Name][]string
 	sem        *semaphore.Weighted
 	wg         *sync.WaitGroup
 	pool       *sync.Pool
 	mux        *sync.Mutex
 }
 
-func addKnown(zone string, rs *rangeset.RangeSet[string], rn rangeset.RangeEntry[string], bitmap []uint16, rrTypes map[string][]string, mux *sync.Mutex) bool {
+func addKnown(zone dns.Name, rs *rangeset.RangeSet[dns.Name], rn rangeset.RangeEntry[dns.Name], bitmap dns.TypeBitMap, rrTypes map[dns.Name][]string, mux *sync.Mutex) bool {
 	if !dns.IsSubDomain(zone, rn.Start) {
 		return false
 	}
@@ -36,11 +36,11 @@ func addKnown(zone string, rs *rangeset.RangeSet[string], rn rangeset.RangeEntry
 	}
 
 	var nsecTypes []string
-	for _, t := range bitmap {
+	for t := range bitmap.Iter {
 		switch t {
 		case dns.TypeNSEC, dns.TypeRRSIG: // skip
 		default:
-			nsecTypes = append(nsecTypes, dns.Type(t).String())
+			nsecTypes = append(nsecTypes, t.String())
 		}
 	}
 
@@ -53,20 +53,20 @@ func addKnown(zone string, rs *rangeset.RangeSet[string], rn rangeset.RangeEntry
 	return true
 }
 
-func unknownRanges(zone string, rs *rangeset.RangeSet[string]) iter.Seq[rangeset.RangeEntry[string]] {
-	return func(yield func(rangeset.RangeEntry[string]) bool) {
+func unknownRanges(zone dns.Name, rs *rangeset.RangeSet[dns.Name]) iter.Seq[rangeset.RangeEntry[dns.Name]] {
+	return func(yield func(rangeset.RangeEntry[dns.Name]) bool) {
 		l := len(rs.Ranges)
 
 		if l == 0 {
 			// no known results, just give the whole zone
-			_ = yield(rangeset.RangeEntry[string]{Start: zone, End: zone})
+			_ = yield(rangeset.RangeEntry[dns.Name]{Start: zone, End: zone})
 			return
 		}
 
 		firstName := rs.Ranges[0].Start
 		if firstName != zone {
 			// unknown range before first known range
-			if !yield(rangeset.RangeEntry[string]{Start: zone, End: firstName}) {
+			if !yield(rangeset.RangeEntry[dns.Name]{Start: zone, End: firstName}) {
 				return
 			}
 		}
@@ -77,32 +77,32 @@ func unknownRanges(zone string, rs *rangeset.RangeSet[string]) iter.Seq[rangeset
 			end := rs.Ranges[i+1].Start
 			last = rs.Ranges[i+1].End
 
-			if !yield(rangeset.RangeEntry[string]{Start: start, End: end}) {
+			if !yield(rangeset.RangeEntry[dns.Name]{Start: start, End: end}) {
 				return
 			}
 		}
 
 		if last != zone {
-			if !yield(rangeset.RangeEntry[string]{Start: last, End: zone}) {
+			if !yield(rangeset.RangeEntry[dns.Name]{Start: last, End: zone}) {
 				return
 			}
 		}
 	}
 }
 
-func nsecWalkWorker(zoneChan <-chan retryWrap[fieldData, empty], refeedChan chan<- retryWrap[fieldData, empty], dataOutChan chan<- *walkZone, wg, retryWg *sync.WaitGroup) {
+func nsecWalkWorker(zoneChan <-chan retryWrap[nameData, empty], refeedChan chan<- retryWrap[nameData, empty], dataOutChan chan<- *walkZone, wg, retryWg *sync.WaitGroup) {
 	resolverWorker(zoneChan, refeedChan, dataOutChan, &dns.Msg{}, nsecWalkResolve, wg, retryWg)
 }
 
-func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[string]) {
+func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[dns.Name]) {
 	defer wz.wg.Done()
 
 	zone := wz.zone
 
-	knownRanges := rangeset.RangeSet[string]{Compare: dnsCompare, HasRWrap: true, RWrapV: zone}
+	knownRanges := rangeset.RangeSet[dns.Name]{Compare: dns.Compare, HasRWrap: true, RWrapV: zone}
 
-	full := rangeset.RangeEntry[string]{Start: zone, End: zone}
-	for _, rn := range []rangeset.RangeEntry[string]{{Start: zone, End: thisRn.Start}, {Start: thisRn.End, End: zone}} {
+	full := rangeset.RangeEntry[dns.Name]{Start: zone, End: zone}
+	for _, rn := range []rangeset.RangeEntry[dns.Name]{{Start: zone, End: thisRn.Start}, {Start: thisRn.End, End: zone}} {
 		if rn != full {
 			knownRanges.Add(rn)
 		}
@@ -112,7 +112,7 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[string]) {
 
 	for _, rn := range unknowns {
 		for middle := range getMiddle(zone, rn) {
-			wz.sem.Acquire(context.Background(), 1)
+			_ = wz.sem.Acquire(context.Background(), 1)
 			connCache := wz.pool.Get().(*connCache)
 			msg := nsecWalkerResolve(middle, connCache)
 			wz.pool.Put(connCache)
@@ -122,19 +122,19 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[string]) {
 				continue
 			}
 
-			var subdomains []string
+			var subdomains []dns.Name
 
 			for _, rr := range msg.Ns {
 				switch rrT := rr.(type) {
 				case *dns.SOA:
-					normalizeRR(rrT)
-					if soaZone := rrT.Hdr.Name; dnsCompare(zone, soaZone) != 0 && dns.IsSubDomain(zone, soaZone) {
+					dns.Canonicalize(rrT)
+					if soaZone := rrT.Hdr.Name; dns.Compare(zone, soaZone) != 0 && dns.IsSubDomain(zone, soaZone) {
 						// fmt.Printf("found subdomain %s of domain %s\n", soaZone, zone)
 						subdomains = append(subdomains, soaZone)
 					}
 				case *dns.RRSIG:
-					normalizeRR(rrT)
-					if rrsigZone := rrT.SignerName; dnsCompare(zone, rrsigZone) != 0 && dns.IsSubDomain(zone, rrsigZone) {
+					dns.Canonicalize(rrT)
+					if rrsigZone := rrT.SignerName; dns.Compare(zone, rrsigZone) != 0 && dns.IsSubDomain(zone, rrsigZone) {
 						// fmt.Printf("found subdomain %s of domain %s\n", soaZone, zone)
 						subdomains = append(subdomains, rrsigZone)
 					}
@@ -154,8 +154,8 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[string]) {
 			for _, rr := range msg.Ns {
 				switch rrT := rr.(type) {
 				case *dns.NSEC:
-					normalizeRR(rrT)
-					if addKnown(zone, &knownRanges, rangeset.RangeEntry[string]{Start: rrT.Hdr.Name, End: rrT.NextDomain}, rrT.TypeBitMap, wz.rrTypes, wz.mux) {
+					dns.Canonicalize(rrT)
+					if addKnown(zone, &knownRanges, rangeset.RangeEntry[dns.Name]{Start: rrT.Hdr.Name, End: rrT.NextDomain}, rrT.TypeBitMap, wz.rrTypes, wz.mux) {
 						// fmt.Printf("added entry %v\n", rrT)
 						expanded = true
 					}
@@ -181,12 +181,12 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[string]) {
 	}
 }
 
-func nsecWalkResolve(_ *connCache, _ *dns.Msg, zd *retryWrap[fieldData, empty]) (*walkZone, error) {
+func nsecWalkResolve(_ *connCache, _ *dns.Msg, zd *retryWrap[nameData, empty]) (*walkZone, error) {
 	wz := &walkZone{
 		zone:       zd.val.name,
 		id:         zd.val.id,
-		rrTypes:    make(map[string][]string),
-		subdomains: make(Set[string]),
+		rrTypes:    make(map[dns.Name][]string),
+		subdomains: make(Set[dns.Name]),
 		sem:        semaphore.NewWeighted(int64(numProcs)),
 		wg:         &sync.WaitGroup{},
 		pool:       &sync.Pool{},
@@ -197,13 +197,13 @@ func nsecWalkResolve(_ *connCache, _ *dns.Msg, zd *retryWrap[fieldData, empty]) 
 
 	wz.pool.New = func() any { return getConnCache() }
 	wz.wg.Add(1)
-	go nsecWalkResolveWorker(wz, rangeset.RangeEntry[string]{Start: zone, End: zone})
+	go nsecWalkResolveWorker(wz, rangeset.RangeEntry[dns.Name]{Start: zone, End: zone})
 	wz.wg.Wait()
 
 	return wz, nil
 }
 
-func nsecWalkerResolve(name string, connCache *connCache) *dns.Msg {
+func nsecWalkerResolve(name dns.Name, connCache *connCache) *dns.Msg {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -230,7 +230,7 @@ func nsecWalkerResolve(name string, connCache *connCache) *dns.Msg {
 	return nil
 }
 
-func nsecWalkMaster(db *sql.DB, seq iter.Seq[fieldData]) {
+func nsecWalkMaster(db *sql.DB, seq iter.Seq[nameData]) {
 	tablesFields := map[string]string{
 		"name":    "name",
 		"rr_type": "name",
@@ -280,7 +280,7 @@ func nsecWalkResWrite(tableMap TableMap, stmtMap StmtMap, res nsecWalkResolveRes
 		if rr.rrName == res.rrName.name {
 			rrNameID = defaultRRNameID
 		} else {
-			rrNameID = tableMap.get("rr_name", rr.rrName)
+			rrNameID = tableMap.get("rr_name", rr.rrName.String())
 		}
 
 		rrValueID := tableMap.get("rr_value", rr.rrValue)
@@ -296,7 +296,7 @@ func nsecWalkInsert(tableMap TableMap, stmtMap StmtMap, zw *walkZone) {
 	zoneID := zw.id
 
 	for rrName, rrtL := range zw.rrTypes {
-		rrNameID := tableMap.get("rr_name", rrName)
+		rrNameID := tableMap.get("rr_name", rrName.String())
 
 		for _, rrType := range rrtL {
 			if rrType == "NS" {
@@ -310,7 +310,7 @@ func nsecWalkInsert(tableMap TableMap, stmtMap StmtMap, zw *walkZone) {
 	}
 
 	for subdomain := range zw.subdomains {
-		childZoneID := tableMap.get("name", subdomain)
+		childZoneID := tableMap.get("name", subdomain.String())
 		stmtMap.exec("name_to_zone", childZoneID)
 		stmtMap.exec("subdomain", zoneID, childZoneID)
 	}
@@ -319,7 +319,7 @@ func nsecWalkInsert(tableMap TableMap, stmtMap StmtMap, zw *walkZone) {
 }
 
 func nsecWalk(db *sql.DB) {
-	readerWriter("performing NSEC walks", db, getDbFieldData(`
+	readerWriter("performing NSEC walks", db, getDbNameData(`
 	SELECT DISTINCT zone.name, zone.id
 	FROM name AS zone
 	INNER JOIN zone_nsec_state ON zone_nsec_state.zone_id = zone.id
@@ -330,18 +330,20 @@ func nsecWalk(db *sql.DB) {
 `, db), nsecWalkMaster)
 }
 
-func _getMiddle(zone string, rn rangeset.RangeEntry[string]) iter.Seq[[]string] {
+var rootName = mustParseName(".")
+
+func _getMiddle(zone dns.Name, rn rangeset.RangeEntry[dns.Name]) iter.Seq[dns.Name] {
 	start := rn.Start
 	end := rn.End
-	return func(yield func([]string) bool) {
-		splitStart := dns.SplitDomainName(start)
-		splitEnd := dns.SplitDomainName(end)
+	return func(yield func(dns.Name) bool) {
+		splitStart := start.SplitRaw()
+		splitEnd := end.SplitRaw()
 
-		if !(end == zone || end == ".") && splitEnd == nil {
+		if !(end == zone || end == rootName) && splitEnd == nil {
 			panic(fmt.Sprintf("end splits to nil: %s", end))
 		}
 
-		if (!(start == zone || start == ".")) && splitStart == nil {
+		if (!(start == zone || start == rootName)) && splitStart == nil {
 			panic(fmt.Sprintf("start splits to nil: %s", start))
 		}
 
@@ -366,17 +368,16 @@ func _getMiddle(zone string, rn rangeset.RangeEntry[string]) iter.Seq[[]string] 
 			// shouldn't run into this very often anyway
 			if splitEnd[0] == "*" {
 				for _, s := range []string{" ", "!", "$"} {
-					res := append([]string{s}, common...)
-					if !yield(res) {
+					if res, err := dns.NameFromLabels(append([]string{s}, common...)); err == nil && !yield(res) {
 						return
 					}
 				}
 			}
 
-			if !yield(splitStart) {
+			if !yield(start) {
 				return
 			}
-			if !yield(append([]string{"-"}, splitStart...)) {
+			if res, err := dns.NameFromLabels(append([]string{"-"}, splitStart...)); err == nil && !yield(res) {
 				return
 			}
 		}
@@ -385,8 +386,7 @@ func _getMiddle(zone string, rn rangeset.RangeEntry[string]) iter.Seq[[]string] 
 			last := splitEnd[0]
 			if last[len(last)-1] == '-' {
 				last = last[:len(last)-1] + ","
-				res := append([]string{last}, common...)
-				if !yield(res) {
+				if res, err := dns.NameFromLabels(append([]string{last}, common...)); err == nil && !yield(res) {
 					return
 				}
 			}
@@ -412,11 +412,11 @@ func _getMiddle(zone string, rn rangeset.RangeEntry[string]) iter.Seq[[]string] 
 			endNum.SetString(maxLabelNum, 10)
 		}
 
-		// TODO could run up against the limit of 255 bytes per name
-		splitALen := max(20, min(63, 2+max(startLen, endLen)))
+		commonLen := check1(dns.NameFromLabels(common)).EncodedLen()
+
+		splitALen := min(max(20, min(63, 2+max(startLen, endLen))), 255-commonLen-2)
 		for splitS := range splitAscii(startNum, endNum, 2, splitALen) {
-			res := append([]string{splitS}, common...)
-			if !yield(res) {
+			if res, err := dns.NameFromLabels(append([]string{splitS}, common...)); err == nil && !yield(res) {
 				return
 			}
 		}
@@ -425,8 +425,7 @@ func _getMiddle(zone string, rn rangeset.RangeEntry[string]) iter.Seq[[]string] 
 			startNum := big.NewInt(0)
 			endNum := labelToNum(splitEndCopy[commonLabels])
 			for splitS := range splitAscii(startNum, endNum, 2, 20) {
-				res := append([]string{splitS}, common...)
-				if !yield(res) {
+				if res, err := dns.NameFromLabels(append([]string{splitS}, common...)); err == nil && !yield(res) {
 					return
 				}
 			}
@@ -434,14 +433,10 @@ func _getMiddle(zone string, rn rangeset.RangeEntry[string]) iter.Seq[[]string] 
 	}
 }
 
-func getMiddle(zone string, rn rangeset.RangeEntry[string]) iter.Seq[string] {
-	return func(yield func(string) bool) {
-		for s := range _getMiddle(zone, rn) {
-			res := strings.Join(s, ".") + "."
-			if _, ok := dns.IsDomainName(res); !ok {
-				continue
-			}
-			if !(dns.IsSubDomain(zone, res) && dnsCompare(rn.Start, res) <= 0 && (rn.End == zone || dnsCompare(res, rn.End) == -1)) {
+func getMiddle(zone dns.Name, rn rangeset.RangeEntry[dns.Name]) iter.Seq[dns.Name] {
+	return func(yield func(dns.Name) bool) {
+		for res := range _getMiddle(zone, rn) {
+			if !(dns.IsSubDomain(zone, res) && dns.Compare(rn.Start, res) <= 0 && (rn.End == zone || dns.Compare(res, rn.End) == -1)) {
 				continue
 			}
 			if !yield(res) {
@@ -449,99 +444,4 @@ func getMiddle(zone string, rn rangeset.RangeEntry[string]) iter.Seq[string] {
 			}
 		}
 	}
-}
-
-// TODO get Compare into miekg/dns
-
-// returns an integer value similar to strcmp
-// (0 for equal values, -1 if s1 < s2, 1 if s1 > s2)
-func dnsCompare(s1, s2 string) int {
-	s1b := doDDD([]byte(s1))
-	s2b := doDDD([]byte(s2))
-
-	s1 = string(s1b)
-	s2 = string(s2b)
-
-	s1lend := len(s1)
-	s2lend := len(s2)
-
-	for i := 0; ; i++ {
-		s1lstart, end1 := dns.PrevLabel(s1, i)
-		s2lstart, end2 := dns.PrevLabel(s2, i)
-
-		if end1 && end2 {
-			return 0
-		}
-
-		s1l := string(s1b[s1lstart:s1lend])
-		s2l := string(s2b[s2lstart:s2lend])
-
-		if cmp := labelCompare(s1l, s2l); cmp != 0 {
-			return cmp
-		}
-
-		s1lend = s1lstart - 1
-		s2lend = s2lstart - 1
-		if s1lend == -1 {
-			s1lend = 0
-		}
-		if s2lend == -1 {
-			s2lend = 0
-		}
-	}
-}
-
-func doDDD(b []byte) []byte {
-	lb := len(b)
-	for i := range lb {
-		if i+3 < lb && b[i] == '\\' && isDigit(b[i+1]) && isDigit(b[i+2]) && isDigit(b[i+3]) {
-			b[i] = dddToByte(b[i+1 : i+4])
-			for j := i + 1; j < lb-3; j++ {
-				b[j] = b[j+3]
-			}
-			lb -= 3
-		}
-	}
-	return b[:lb]
-}
-
-func dddToByte(s []byte) byte {
-	_ = s[2] // bounds check hint to compiler; see golang.org/issue/14808
-	return byte((s[0]-'0')*100 + (s[1]-'0')*10 + (s[2] - '0'))
-}
-
-func isDigit(b byte) bool { return b <= '9' && b >= '0' }
-
-// essentially strcasecmp
-// (0 for equal values, -1 if s1 < s2, 1 if s1 > s2)
-func labelCompare(a, b string) int {
-	la := len(a)
-	lb := len(b)
-	minLen := la
-	if lb < la {
-		minLen = lb
-	}
-	for i := range minLen {
-		ai := a[i]
-		bi := b[i]
-		if ai >= 'A' && ai <= 'Z' {
-			ai |= 'a' - 'A'
-		}
-		if bi >= 'A' && bi <= 'Z' {
-			bi |= 'a' - 'A'
-		}
-		if ai != bi {
-			if ai > bi {
-				return 1
-			}
-			return -1
-		}
-	}
-
-	if la > lb {
-		return 1
-	} else if la < lb {
-		return -1
-	}
-	return 0
 }

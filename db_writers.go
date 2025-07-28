@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"iter"
 
-	"github.com/miekg/dns"
+	"github.com/monoidic/dns"
 )
 
 func insertRRWorker(db *sql.DB, seq iter.Seq[rrData]) {
@@ -30,9 +30,9 @@ func insertRRWorker(db *sql.DB, seq iter.Seq[rrData]) {
 func insertRRW(tableMap TableMap, stmtMap StmtMap, rrD rrData) {
 	switch rrD.msgtype {
 	case rrDataRegular:
-		zoneID := tableMap.get("name", rrD.zone)
+		zoneID := tableMap.get("name", rrD.zone.String())
 		rrTypeID := tableMap.get("rr_type", rrD.rrType)
-		rrNameID := tableMap.get("rr_name", rrD.rrName)
+		rrNameID := tableMap.get("rr_name", rrD.rrName.String())
 		rrValueID := tableMap.get("rr_value", rrD.rrValue)
 
 		poison := !dns.IsSubDomain(rrD.zone, rrD.rrName)
@@ -44,20 +44,20 @@ func insertRRW(tableMap TableMap, stmtMap StmtMap, rrD rrData) {
 		}
 
 	case rrDataZoneDone:
-		zoneID := tableMap.get("name", rrD.zone)
+		zoneID := tableMap.get("name", rrD.zone.String())
 
 		stmtMap.exec("update", zoneID)
 
 	case rrDataZoneAxfrEnd:
 		ipID := tableMap.get("ip", rrD.ip)
-		zoneID := tableMap.get("name", rrD.zone)
+		zoneID := tableMap.get("name", rrD.zone.String())
 
 		stmtMap.exec("vuln_ns", ipID, zoneID)
 		stmtMap.exec("update", zoneID)
 
 	case rrDataZoneAxfrTry:
 		ipID := tableMap.get("ip", rrD.ip)
-		zoneID := tableMap.get("name", rrD.zone)
+		zoneID := tableMap.get("name", rrD.zone.String())
 
 		stmtMap.exec("axfr_tried", ipID, zoneID)
 	}
@@ -83,8 +83,8 @@ func nsRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
 	rr := check1(dns.NewRR(ad.rrValue.name))
 	nsRR := rr.(*dns.NS)
 
-	zoneID := tableMap.get("name", ad.rrName.name)
-	nsID := tableMap.get("name", nsRR.Ns)
+	zoneID := tableMap.get("name", ad.rrName.name.String())
+	nsID := tableMap.get("name", nsRR.Ns.String())
 
 	stmtMap.exec("set_zone", zoneID)
 	stmtMap.exec("set_ns", nsID)
@@ -94,7 +94,7 @@ func nsRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
 		stmtMap.exec("set_parent_self", ad.fromParent, ad.fromSelf, zoneID, nsID)
 
 		if ad.fromParent {
-			parentID := tableMap.get("name", nsRR.Hdr.Name)
+			parentID := tableMap.get("name", nsRR.Hdr.Name.String())
 			stmtMap.exec("set_checked", parentID)
 		}
 	}
@@ -129,7 +129,7 @@ func ipRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
 		panic(fmt.Sprintf("invalid IP type: %T\n", rr))
 	}
 
-	nameID := tableMap.get("name", ad.rrName.name)
+	nameID := tableMap.get("name", ad.rrName.name.String())
 	ipID := tableMap.get("ip", ip)
 
 	stmtMap.exec("name_ip", nameID, ipID)
@@ -158,10 +158,10 @@ func mxRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
 	rr := check1(dns.NewRR(ad.rrValue.name))
 
 	mxRR := rr.(*dns.MX)
-	normalizeRR(mxRR)
+	dns.Canonicalize(mxRR)
 
-	nameID := tableMap.get("name", ad.rrName.name)
-	mxID := tableMap.get("name", mxRR.Mx)
+	nameID := tableMap.get("name", ad.rrName.name.String())
+	mxID := tableMap.get("name", mxRR.Mx.String())
 
 	stmtMap.exec("set_mx", mxID)
 	stmtMap.exec("name_mx", nameID, mxID, mxRR.Preference)
@@ -187,11 +187,11 @@ func ptrRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
 	if ip, err := ptrToIP(ad.rrName.name); err != nil {
 		rr := check1(dns.NewRR(ad.rrValue.name))
 		ptrRR := rr.(*dns.PTR)
-		normalizeRR(ptrRR)
+		dns.Canonicalize(ptrRR)
 
 		ipString := ip.String()
 		ipID := tableMap.get("ip", ipString)
-		ptrID := tableMap.get("name", ptrRR.Ptr)
+		ptrID := tableMap.get("name", ptrRR.Ptr.String())
 
 		stmtMap.exec("rdns", ipID, ptrID)
 		stmtMap.exec("name_to_rdns", ptrID)

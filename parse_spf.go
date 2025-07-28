@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/miekg/dns"
+	"github.com/monoidic/dns"
 )
 
 type spfMechanism uint8

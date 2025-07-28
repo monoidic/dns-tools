@@ -7,15 +7,15 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/miekg/dns"
+	"github.com/monoidic/dns"
 )
 
 type nsecMapResults struct {
 	zoneID    int64
 	success   bool
 	nsecState string
-	rname     string
-	mname     string
+	rname     dns.Name
+	mname     dns.Name
 	nsecS     string
 	optout    bool
 }
@@ -50,15 +50,14 @@ func getNsecState(nsecSigs []*dns.NSEC, nsec3Sigs []*dns.NSEC3) (string, string,
 	case hasNsec: // regular nsec
 		nsecType := "plain_nsec"
 		for _, rr := range nsecSigs {
-			for _, s := range []string{rr.Hdr.Name, rr.NextDomain} {
-				decoded := []byte(s)
-				decoded = doDDD(decoded)
+			for _, s := range []dns.Name{rr.Hdr.Name, rr.NextDomain} {
+				decoded := []byte(s.String())
 				switch decoded[0] {
 				case '\x00', '!', '~':
 					nsecType = "secure_nsec"
 				}
 			}
-			nsecSArr = append(nsecSArr, rr.Hdr.Name+"^"+rr.NextDomain)
+			nsecSArr = append(nsecSArr, rr.Hdr.Name.String()+"^"+rr.NextDomain.String())
 		}
 		nsecS = strings.Join(nsecSArr, "|")
 		return nsecType, nsecS, false
@@ -88,7 +87,7 @@ func getNsecState(nsecSigs []*dns.NSEC, nsec3Sigs []*dns.NSEC3) (string, string,
 			prefix = append(prefix, "nsec")
 			builder := make([]string, 0, len(nsecSigs))
 			for _, rr := range nsecSigs {
-				builder = append(builder, rr.Hdr.Name+"^"+rr.NextDomain)
+				builder = append(builder, rr.Hdr.Name.String()+"^"+rr.NextDomain.String())
 			}
 			suffix = append(suffix, strings.Join(builder, "|"))
 		}
@@ -110,7 +109,7 @@ func getNsecState(nsecSigs []*dns.NSEC, nsec3Sigs []*dns.NSEC3) (string, string,
 	}
 }
 
-func checkNsecWorker(dataChan <-chan retryWrap[fieldData, empty], refeedChan chan<- retryWrap[fieldData, empty], outChan chan<- nsecMapResults, wg, retryWg *sync.WaitGroup) {
+func checkNsecWorker(dataChan <-chan retryWrap[nameData, empty], refeedChan chan<- retryWrap[nameData, empty], outChan chan<- nsecMapResults, wg, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -128,19 +127,21 @@ func checkNsecWorker(dataChan <-chan retryWrap[fieldData, empty], refeedChan cha
 	resolverWorker(dataChan, refeedChan, outChan, &msg, checkNsecQuery, wg, retryWg)
 }
 
-func zoneRandomName(zone string) string {
-	var ret string
-	label := string(randomLabel()[1:])
-	if zone == "." {
-		zone = ""
+func zoneRandomName(zone dns.Name) dns.Name {
+	var label string
+	if remaining := 255 - zone.EncodedLen() - 2; remaining < 63 {
+		label = string(randomLabelLen(max(1, remaining-2), remaining)[1:])
+	} else {
+		label = string(randomLabel()[1:])
 	}
-	ret = label + "." + zone
+	labels := zone.SplitRaw()
 
-	return ret
+	return check1(dns.NameFromLabels(append([]string{label}, labels...)))
 }
 
-func checkNsecQuery(connCache *connCache, msg *dns.Msg, fd *retryWrap[fieldData, empty]) (nmr nsecMapResults, err error) {
-	var nsecState, rname, mname, nsecS string
+func checkNsecQuery(connCache *connCache, msg *dns.Msg, fd *retryWrap[nameData, empty]) (nmr nsecMapResults, err error) {
+	var nsecState, nsecS string
+	var mname, rname dns.Name
 	var optOut bool
 	var res *dns.Msg
 
@@ -227,7 +228,7 @@ soaLoop:
 	return
 }
 
-func checkNsecMaster(db *sql.DB, seq iter.Seq[fieldData]) {
+func checkNsecMaster(db *sql.DB, seq iter.Seq[nameData]) {
 	tablesFields := map[string]string{
 		"nsec_state": "name",
 		"rname":      "name",
@@ -251,8 +252,8 @@ func checkNsecInsert(tableMap TableMap, stmtMap StmtMap, nmr nsecMapResults) {
 	}
 
 	nsecStateID := tableMap.roGet("nsec_state", nmr.nsecState)
-	rnameID := tableMap.get("rname", nmr.rname)
-	mnameID := tableMap.get("mname", nmr.mname)
+	rnameID := tableMap.get("rname", nmr.rname.String())
+	mnameID := tableMap.get("mname", nmr.mname.String())
 
 	stmtMap.exec("insert", zoneID, nsecStateID, rnameID, mnameID, nmr.nsecS, nmr.optout)
 }
