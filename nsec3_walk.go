@@ -19,6 +19,7 @@ import (
 
 	"github.com/monoidic/dns"
 	"github.com/monoidic/rangeset"
+	"golang.org/x/sync/semaphore"
 )
 
 type Nsec3Hash struct {
@@ -97,14 +98,49 @@ type nsec3WalkZone struct {
 	zone        dns.Name
 	id          int64
 	knownRanges rangeset.RangeSet[Nsec3Hash]
+	busyRanges  Set[rangeset.RangeEntry[Nsec3Hash]]
 	rrTypes     map[Nsec3Hash][]string
 	salt        []byte
+	sem         *semaphore.Weighted
 	mux         *sync.RWMutex
+	nsec3Param  *dns.NSEC3PARAM
+	splitZone   []string
+	connCache   *connCache
 	iterations  int
 }
 
 func (wz *nsec3WalkZone) contains(hash Nsec3Hash) bool {
-	return wz.knownRanges.Contains(hash)
+	if wz.knownRanges.Contains(hash) {
+		return true
+	}
+	enclosing := wz.enclosingKnownRange(hash)
+	return wz.busyRanges.Contains(enclosing)
+}
+
+func (wz *nsec3WalkZone) enclosingKnownRange(hash Nsec3Hash) rangeset.RangeEntry[Nsec3Hash] {
+	var ret rangeset.RangeEntry[Nsec3Hash]
+	if len(wz.knownRanges.Ranges) == 0 {
+		ret.Start = nsec3HashStart
+		ret.End = nsec3HashEnd
+		return ret
+	}
+
+	idx, _ := slices.BinarySearchFunc(wz.knownRanges.Ranges, hash, func(re rangeset.RangeEntry[Nsec3Hash], h Nsec3Hash) int {
+		return bytes.Compare(re.End.H[:], h.H[:])
+	})
+	if idx == 0 {
+		ret.Start = nsec3HashStart
+	} else {
+		ret.Start = wz.knownRanges.Ranges[idx-1].End
+	}
+
+	if idx == len(wz.knownRanges.Ranges) {
+		ret.End = nsec3HashEnd
+	} else {
+		ret.End = wz.knownRanges.Ranges[idx].Start
+	}
+
+	return ret
 }
 
 func (wz nsec3WalkZone) String() string {
@@ -496,10 +532,14 @@ var minDiff = big.NewInt(MIN_DIFF)
 func nsec3WalkResolve(connCache *connCache, _ *dns.Msg, zd *retryWrap[nameData, empty]) (nsec3WalkZone, error) {
 	wz := nsec3WalkZone{
 		zone:        zd.val.name,
+		splitZone:   zd.val.name.SplitRaw(),
 		id:          zd.val.id,
 		rrTypes:     make(map[Nsec3Hash][]string),
 		knownRanges: rangeset.RangeSet[Nsec3Hash]{Compare: nsec3Compare},
+		busyRanges:  make(Set[rangeset.RangeEntry[Nsec3Hash]]),
 		mux:         &sync.RWMutex{},
+		sem:         semaphore.NewWeighted(int64(numProcs)),
+		connCache:   connCache,
 	}
 
 	// fmt.Printf("starting walk on zone %s\n", zone)
@@ -508,16 +548,17 @@ func nsec3WalkResolve(connCache *connCache, _ *dns.Msg, zd *retryWrap[nameData, 
 	if nsec3Param == nil {
 		return nsec3WalkZone{}, errors.New("unable to fetch NSEC3PARAM")
 	}
+	wz.nsec3Param = nsec3Param
 
 	wz.salt = nsec3Param.Salt.Raw()
 	wz.iterations = int(nsec3Param.Iterations)
 
 	encodedZone := wz.zone.ToWire()
-	splitZone := wz.zone.SplitRaw()
 
 	producedGuesses := make(chan hashEntry, MIDBUFLEN)
 	filteredGuesses := make(chan hashEntry, MIDBUFLEN)
 	ctx, cancel := context.WithCancel(context.Background())
+	// actually called in processGuess; just here to shut up the linter
 	defer cancel()
 
 	// producer
@@ -552,101 +593,134 @@ func nsec3WalkResolve(connCache *connCache, _ *dns.Msg, zd *retryWrap[nameData, 
 		}()
 	}
 
-hashLoop:
+	var err error
+
 	for guess := range filteredGuesses {
-		wz.mux.RLock()
-		contains := wz.contains(guess.hash)
-		wz.mux.RUnlock()
-		if contains {
-			continue
-		}
+		go processGuess(&wz, cancel, guess, &err)
+	}
 
-		hashName := check1(dns.NameFromLabels(append([]string{string(guess.label)}, splitZone...)))
+	return wz, err
+}
 
-		res := nsec3Query(connCache, hashName)
-		if res == nil {
-			continue
-		}
+func processGuess(wz *nsec3WalkZone, cancel context.CancelFunc, guess hashEntry, errP *error) {
+	wz.mux.RLock()
+	contains := wz.contains(guess.hash)
+	wz.mux.RUnlock()
+	if contains {
+		return
+	}
 
-		for _, rr := range res.Ns {
-			switch rrT := rr.(type) {
-			case *dns.SOA:
-				dns.Canonicalize(rrT)
-				if soaZone := rrT.Hdr.Name; dns.Compare(wz.zone, soaZone) != 0 && dns.IsSubDomain(wz.zone, soaZone) {
-					continue hashLoop
-				}
-			}
-		}
-
-		var sawThis bool
-
-		var entries []rangeset.RangeEntry[Nsec3Hash]
-		var bitmaps []dns.TypeBitMap
-
-		for _, rr := range res.Ns {
-			switch rrT := rr.(type) {
-			case *dns.NSEC3:
-				dns.Canonicalize(rrT)
-				if !(rrT.Salt == nsec3Param.Salt && rrT.Iterations == nsec3Param.Iterations) {
-					// params changed in the middle of the walk
-					return nsec3WalkZone{}, errors.New("nsec3 params changed")
-				}
-
-				if rrT.Cover(hashName) {
-					sawThis = true
-				}
-
-				start, end := nsec3RRToHashes(rrT)
-
-				if labelDiffSmall(start, end) {
-					return nsec3WalkZone{}, errors.New("nsec3 white lies?")
-				}
-
-				entries = append(entries, rangeset.RangeEntry[Nsec3Hash]{Start: start, End: end})
-				bitmaps = append(bitmaps, rrT.TypeBitMap)
-			}
-		}
-
-		wz.mux.Lock()
-		for i, entry := range entries {
-			bitmap := bitmaps[i]
-			wz.addKnown(entry, bitmap)
-		}
+	// re-check with a write lock, just in case the range was claimed by a different write lock before this one was claimed
+	wz.mux.Lock()
+	contains = wz.contains(guess.hash)
+	if contains {
 		wz.mux.Unlock()
+		return
+	}
 
-		if !sawThis {
-			fmt.Printf("expected to see something covering hashName=%s hash=%s did not\n", hashName, guess.hash)
-			for _, rr := range res.Ns {
-				fmt.Println(rr)
-			}
-		}
+	enclosing := wz.enclosingKnownRange(guess.hash)
+	wz.busyRanges.Add(enclosing)
+	wz.mux.Unlock()
 
-		/*
-			if !noCL {
-				// validate hash
-				reconstructedLabel := []byte{byte(len(guess.label))}
-				reconstructedLabel = append(reconstructedLabel, guess.label...)
-				expected := nsec3Hash(reconstructedLabel, encodedZone, wz.salt, wz.iterations)
-				if expected != guess.hash {
-					log.Panicf("lol broken opencl, expected %s, got %s, label %s", expected, guess.hash, guess.label)
-				}
+	// cleanup
+	defer func() {
+		wz.mux.Lock()
+		wz.busyRanges.Delete(enclosing)
+		wz.mux.Unlock()
+	}()
 
-			}
-		*/
+	hashName := check1(dns.NameFromLabels(append([]string{string(guess.label)}, wz.splitZone...)))
 
-		fmt.Printf("zone=%s %d ranges %d known names %s zone discovered\n", wz.zone, len(wz.knownRanges.Ranges), len(wz.rrTypes), wz.percentDiscovered())
+	_ = wz.sem.Acquire(context.Background(), 1)
+	res := nsec3Query(wz.connCache, hashName)
+	wz.sem.Release(1)
+	if res == nil {
+		return
+	}
 
-		if len(wz.knownRanges.Ranges) < 100 {
-			fmt.Println(wz.String())
-		}
-
-		if len(wz.knownRanges.Ranges) == 1 {
-			rn := wz.knownRanges.Ranges[0]
-			if rn.Start == nsec3HashStart && rn.End == nsec3HashEnd {
-				break
+	for _, rr := range res.Ns {
+		switch rrT := rr.(type) {
+		case *dns.SOA:
+			dns.Canonicalize(rrT)
+			if soaZone := rrT.Hdr.Name; dns.Compare(wz.zone, soaZone) != 0 && dns.IsSubDomain(wz.zone, soaZone) {
+				return
 			}
 		}
 	}
+	var sawThis bool
 
-	return wz, nil
+	var entries []rangeset.RangeEntry[Nsec3Hash]
+	var bitmaps []dns.TypeBitMap
+
+	for _, rr := range res.Ns {
+		switch rrT := rr.(type) {
+		case *dns.NSEC3:
+			dns.Canonicalize(rrT)
+			if !(rrT.Salt == wz.nsec3Param.Salt && rrT.Iterations == wz.nsec3Param.Iterations) {
+				// params changed in the middle of the walk
+				wz.mux.Lock()
+				*errP = errors.New("nsec3 params changed")
+				cancel()
+				wz.mux.Unlock()
+				return
+			}
+
+			if rrT.Cover(hashName) {
+				sawThis = true
+			}
+
+			start, end := nsec3RRToHashes(rrT)
+
+			if labelDiffSmall(start, end) {
+				wz.mux.Lock()
+				*errP = errors.New("nsec3 white lies?")
+				cancel()
+				wz.mux.Unlock()
+				return
+			}
+
+			entries = append(entries, rangeset.RangeEntry[Nsec3Hash]{Start: start, End: end})
+			bitmaps = append(bitmaps, rrT.TypeBitMap)
+		}
+	}
+
+	wz.mux.Lock()
+	for i, entry := range entries {
+		bitmap := bitmaps[i]
+		wz.addKnown(entry, bitmap)
+	}
+	wz.mux.Unlock()
+
+	if !sawThis {
+		fmt.Printf("expected to see something covering hashName=%s hash=%s did not\n", hashName, guess.hash)
+		for _, rr := range res.Ns {
+			fmt.Println(rr)
+		}
+	}
+
+	/*
+		if !noCL {
+			// validate hash
+			reconstructedLabel := []byte{byte(len(guess.label))}
+			reconstructedLabel = append(reconstructedLabel, guess.label...)
+			expected := nsec3Hash(reconstructedLabel, encodedZone, wz.salt, wz.iterations)
+			if expected != guess.hash {
+				log.Panicf("lol broken opencl, expected %s, got %s, label %s", expected, guess.hash, guess.label)
+			}
+
+		}
+	*/
+
+	fmt.Printf("zone=%s %d ranges %d known names %s zone discovered\n", wz.zone, len(wz.knownRanges.Ranges), len(wz.rrTypes), wz.percentDiscovered())
+
+	if len(wz.knownRanges.Ranges) < 100 {
+		fmt.Println(wz.String())
+	}
+
+	if len(wz.knownRanges.Ranges) == 1 {
+		rn := wz.knownRanges.Ranges[0]
+		if rn.Start == nsec3HashStart && rn.End == nsec3HashEnd {
+			cancel()
+		}
+	}
 }
