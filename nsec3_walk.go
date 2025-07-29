@@ -538,7 +538,7 @@ func nsec3WalkResolve(connCache *connCache, _ *dns.Msg, zd *retryWrap[nameData, 
 		knownRanges: rangeset.RangeSet[Nsec3Hash]{Compare: nsec3Compare},
 		busyRanges:  make(Set[rangeset.RangeEntry[Nsec3Hash]]),
 		mux:         &sync.RWMutex{},
-		sem:         semaphore.NewWeighted(int64(numProcs)),
+		sem:         semaphore.NewWeighted(1000),
 		connCache:   connCache,
 	}
 

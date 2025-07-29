@@ -187,7 +187,7 @@ func nsecWalkResolve(_ *connCache, _ *dns.Msg, zd *retryWrap[nameData, empty]) (
 		id:         zd.val.id,
 		rrTypes:    make(map[dns.Name][]string),
 		subdomains: make(Set[dns.Name]),
-		sem:        semaphore.NewWeighted(int64(numProcs)),
+		sem:        semaphore.NewWeighted(1000),
 		wg:         &sync.WaitGroup{},
 		pool:       &sync.Pool{},
 		mux:        &sync.Mutex{},
