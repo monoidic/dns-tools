@@ -106,11 +106,16 @@ func validInsert(tableMap TableMap, stmtMap StmtMap, zv zoneValid) {
 
 func getTLDs(yield func(dns.Name) bool) {
 	fp := check1(os.Open("misc/tld.txt"))
+	defer fp.Close()
 
 	scanner := bufio.NewScanner(fp)
 
 	for scanner.Scan() {
 		s := dns.Fqdn(strings.ToLower(scanner.Text()))
+
+		if len(s) == 0 || strings.HasPrefix(s, "//") {
+			continue
+		}
 
 		switch s[0] {
 		case '*':
@@ -120,11 +125,9 @@ func getTLDs(yield func(dns.Name) bool) {
 		}
 
 		if !yield(mustParseName(s)) {
-			break
+			return
 		}
 	}
-
-	check(fp.Close())
 }
 
 func tldListWriter(db *sql.DB, seq iter.Seq[dns.Name]) {
