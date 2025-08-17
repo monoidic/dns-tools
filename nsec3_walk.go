@@ -192,8 +192,29 @@ func (wz *nsec3WalkZone) percentDiscovered() string {
 }
 
 type hashEntry struct {
-	label []byte
-	hash  Nsec3Hash
+	// if construct==true, then unmodified original, need to modify
+	label     []byte
+	hash      Nsec3Hash
+	idx       int
+	indexes   [3]uint8
+	construct bool
+}
+
+func (h hashEntry) reconstructLabel() string {
+	if !h.construct {
+		return string(h.label)
+	}
+
+	out := slices.Clone(h.label)
+	id := h.idx
+
+	for i := range h.indexes {
+		charIdx := id % 36
+		id /= 36
+		out[h.indexes[i]] = nsec3walkcharset[charIdx]
+	}
+
+	return string(out[1:])
 }
 
 func (wz *nsec3WalkZone) addKnown(rn rangeset.RangeEntry[Nsec3Hash], bitmap dns.TypeBitMap) bool {
@@ -629,7 +650,7 @@ func processGuess(wz *nsec3WalkZone, cancel context.CancelFunc, guess hashEntry,
 		wz.mux.Unlock()
 	}()
 
-	hashName := check1(dns.NameFromLabels(append([]string{string(guess.label)}, wz.splitZone...)))
+	hashName := check1(dns.NameFromLabels(append([]string{guess.reconstructLabel()}, wz.splitZone...)))
 
 	_ = wz.sem.Acquire(context.Background(), 1)
 	res := nsec3Query(wz.connCache, hashName)
@@ -701,13 +722,13 @@ func processGuess(wz *nsec3WalkZone, cancel context.CancelFunc, guess hashEntry,
 	/*
 		if !noCL {
 			// validate hash
-			reconstructedLabel := []byte{byte(len(guess.label))}
-			reconstructedLabel = append(reconstructedLabel, guess.label...)
-			expected := nsec3Hash(reconstructedLabel, encodedZone, wz.salt, wz.iterations)
+			label := guess.reconstructLabel()
+			reconstructedLabel := []byte{byte(len(label))}
+			reconstructedLabel = append(reconstructedLabel, ([]byte(label))...)
+			expected := nsec3Hash(reconstructedLabel, wz.zone.ToWire(), wz.salt, wz.iterations)
 			if expected != guess.hash {
-				log.Panicf("lol broken opencl, expected %s, got %s, label %s", expected, guess.hash, guess.label)
+				log.Panicf("lol broken opencl, expected %s, got %s, label %s, raw label %s, reconstructed %s, name %s", expected, guess.hash, hex.EncodeToString([]byte(label)), hex.EncodeToString([]byte(guess.label)), hex.EncodeToString([]byte(reconstructedLabel)), hex.EncodeToString(hashName.ToWire()))
 			}
-
 		}
 	*/
 

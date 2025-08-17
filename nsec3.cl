@@ -19,21 +19,18 @@
   }
 
 def_memcpy(glbl_to_priv, __private, __global)
-    def_memcpy(priv_to_glbl, __global, __private)
 
-        typedef struct { // 519 bytes
+    typedef struct { // 518 bytes
   ushort iterations;
-  uchar label_len;
   uchar name_len;
   uchar salt_len;
   char name_buf[255];
   char salt_buf[255];
-  uchar indexes[4];
+  uchar indexes[3];
 } nsec3_inbuf;
 
-typedef struct { // 83 bytes
+typedef struct { // 20 bytes
   char hash[20];
-  char name_buf[63];
 } nsec3_outbuf;
 //////////////////////////////// END ME
 
@@ -321,15 +318,13 @@ __kernel void nsec3_main(__global const nsec3_inbuf *inbuffer,
                          __global nsec3_outbuf *outbuffer) {
   SHA1_CTX ctx;
   char namebuf[255], saltbuf[255], hashbuf[20];
-  uchar labellen, namelen, saltlen;
+  uchar namelen, saltlen;
   ushort iterations;
-  uchar w, x, y, z;
   uint id, idx;
 
   const uchar hashlen = 20;
 
   iterations = inbuffer->iterations;
-  labellen = inbuffer->label_len;
   namelen = inbuffer->name_len;
   saltlen = inbuffer->salt_len;
 
@@ -338,17 +333,12 @@ __kernel void nsec3_main(__global const nsec3_inbuf *inbuffer,
 
   id = get_global_id(0);
   idx = id;
-  w = (uchar)(id % 36);
-  id /= 36;
-  x = (uchar)(id % 36);
-  id /= 36;
-  y = (uchar)(id % 36);
-  z = (uchar)(id / 36);
 
-  namebuf[inbuffer->indexes[0]] = nsec3walkcharset[w];
-  namebuf[inbuffer->indexes[1]] = nsec3walkcharset[x];
-  namebuf[inbuffer->indexes[2]] = nsec3walkcharset[y];
-  namebuf[inbuffer->indexes[3]] = nsec3walkcharset[z];
+  for (int i = 0; i < sizeof inbuffer->indexes; i++) {
+    int char_idx = id % 36;
+    id /= 36;
+    namebuf[inbuffer->indexes[i]] = nsec3walkcharset[char_idx];
+  }
 
   SHA1Init(&ctx);
   SHA1Update(&ctx, namebuf, namelen);
@@ -373,5 +363,4 @@ __kernel void nsec3_main(__global const nsec3_inbuf *inbuffer,
   }
 
   SHA1Digest_glbl(&ctx, outbuffer[idx].hash);
-  memcpy_priv_to_glbl(outbuffer[idx].name_buf, namebuf + 1, labellen);
 }
