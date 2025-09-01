@@ -27,7 +27,7 @@ type Nsec3Hash struct {
 }
 
 func (nh Nsec3Hash) String() string {
-	return string(base32.HexEncoding.AppendEncode(nil, nh.H[:]))
+	return base32.HexEncoding.EncodeToString(nh.H[:])
 }
 
 func labelToNsec3Hash(label string) Nsec3Hash {
@@ -155,7 +155,7 @@ func (wz nsec3WalkZone) String() string {
 			nonFirst = true
 		}
 
-		sb.WriteString(fmt.Sprintf("%s-%s", string(base32.HexEncoding.AppendEncode(nil, rn.Start.H[:])), string(base32.HexEncoding.AppendEncode(nil, rn.End.H[:]))))
+		sb.WriteString(fmt.Sprintf("%s-%s", rn.Start, rn.End))
 	}
 
 	return sb.String()

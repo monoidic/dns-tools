@@ -156,6 +156,7 @@ func insertMXRR(db *sql.DB, seq iter.Seq[rrDBData]) {
 
 func mxRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
 	rr := check1(dns.NewRR(ad.rrValue.name))
+	defer stmtMap.exec("parsed", ad.id)
 
 	mxRR := rr.(*dns.MX)
 	dns.Canonicalize(mxRR)
@@ -165,7 +166,6 @@ func mxRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
 
 	stmtMap.exec("set_mx", mxID)
 	stmtMap.exec("name_mx", nameID, mxID, mxRR.Preference)
-	stmtMap.exec("parsed", ad.id)
 }
 
 func insertPTRRR(db *sql.DB, seq iter.Seq[rrDBData]) {

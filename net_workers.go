@@ -30,6 +30,7 @@ func mxWriter(db *sql.DB, seq iter.Seq[nameData]) {
 // `insertF` for MX
 func mxWrite(tableMap TableMap, stmtMap StmtMap, mxd mxData) {
 	zoneID := mxd.id
+	defer stmtMap.exec("update", mxd.registered, zoneID)
 
 	if len(mxd.results) > 0 {
 		rrTypeID := tableMap.get("rr_type", "MX")
@@ -40,8 +41,6 @@ func mxWrite(tableMap TableMap, stmtMap StmtMap, mxd mxData) {
 			stmtMap.exec("zone2rr", zoneID, rrTypeID, rrNameID, rrValueID)
 		}
 	}
-
-	stmtMap.exec("update", mxd.registered, zoneID)
 }
 
 // `netWriter` wrapper for checking for active nameservers
@@ -78,19 +77,19 @@ func rdnsWriter(db *sql.DB, seq iter.Seq[fieldData]) {
 // `insertF` for PTR
 func rdnsWrite(tableMap TableMap, stmtMap StmtMap, fdr rrFdResults[dns.PTR]) {
 	ipID := fdr.id
+	defer stmtMap.exec("mapped", ipID)
 
-	if len(fdr.results) > 0 {
-		rrTypeID := tableMap.get("rr_type", "PTR")
-
-		for _, ptr := range fdr.results {
-			rrNameID := tableMap.get("rr_name", ptr.Hdr.Name.String())
-			rrValueID := tableMap.get("rr_value", ptr.String())
-
-			stmtMap.exec("zone2rr", fdr.id, rrTypeID, rrNameID, rrValueID)
-		}
+	if len(fdr.results) == 0 {
+		return
 	}
+	rrTypeID := tableMap.get("rr_type", "PTR")
 
-	stmtMap.exec("mapped", ipID)
+	for _, ptr := range fdr.results {
+		rrNameID := tableMap.get("rr_name", ptr.Hdr.Name.String())
+		rrValueID := tableMap.get("rr_value", ptr.String())
+
+		stmtMap.exec("zone2rr", fdr.id, rrTypeID, rrNameID, rrValueID)
+	}
 }
 
 // `readerF` for SPF TXT queries
@@ -113,6 +112,7 @@ func spfRRWriter(db *sql.DB, seq iter.Seq[nameData]) {
 // `insertF` for SPF TXT
 func spfWrite(tableMap TableMap, stmtMap StmtMap, fdr fdResults) {
 	nameID := fdr.id
+	defer stmtMap.exec("spf_tried", nameID)
 
 	var spfRecords []string
 
@@ -145,8 +145,6 @@ func spfWrite(tableMap TableMap, stmtMap StmtMap, fdr fdResults) {
 			}
 		}
 	}
-
-	stmtMap.exec("spf_tried", nameID)
 }
 
 // `netWriter` wrapper for DMARC TXT queries
@@ -168,6 +166,7 @@ func dmarcRRWriter(db *sql.DB, seq iter.Seq[nameData]) {
 // `insertF` for DMARC TXT
 func dmarcWrite(tableMap TableMap, stmtMap StmtMap, fdr fdResults) {
 	nameID := fdr.id // ID with no '_dmarc.'
+	defer stmtMap.exec("dmarc_tried", nameID)
 
 	var dmarcRecords []string
 
@@ -187,8 +186,6 @@ func dmarcWrite(tableMap TableMap, stmtMap StmtMap, fdr fdResults) {
 			stmtMap.exec("dmarc_valid", false, err.Error(), recordID)
 		}
 	}
-
-	stmtMap.exec("dmarc_tried", nameID)
 }
 
 func chaosTXTWriter(db *sql.DB, seq iter.Seq[fieldData]) {
@@ -208,6 +205,7 @@ func chaosTXTWriter(db *sql.DB, seq iter.Seq[fieldData]) {
 // `insertF` for Chaosnet TXT
 func chaosTXTWrite(tableMap TableMap, stmtMap StmtMap, chr chaosResults) {
 	ipID := chr.id
+	defer stmtMap.exec("chaos_queried", ipID)
 
 	for _, result := range chr.results {
 		queriedNameID := tableMap.get("name", result.queried.String())
@@ -217,8 +215,6 @@ func chaosTXTWrite(tableMap TableMap, stmtMap StmtMap, chr chaosResults) {
 		stmtMap.exec("chaos_query", queriedNameID, ipID)
 		stmtMap.exec("chaos_response", queriedNameID, ipID, responseID, resultNameID)
 	}
-
-	stmtMap.exec("chaos_queried", ipID)
 }
 
 // `readerF` for checking for active nameservers
@@ -358,7 +354,6 @@ func netNSWriter(db *sql.DB, seq iter.Seq[nameData]) {
 // `insertF` for NS
 func nsWrite(tableMap TableMap, stmtMap StmtMap, nsd rrResults[dns.NS]) {
 	zoneID := nsd.id
-
 	defer stmtMap.exec("update", zoneID)
 
 	if len(nsd.results) == 0 {
@@ -402,6 +397,7 @@ func netIPWriter(db *sql.DB, seq iter.Seq[nameData]) {
 func ipWrite(tableMap TableMap, stmtMap StmtMap, ad addrData) {
 	nameID := ad.id
 	registered := ad.registered
+	defer stmtMap.exec("update", registered, nameID)
 
 	if len(ad.cname) > 0 {
 		fmt.Printf("cname from address %s\n", ad.name)
@@ -430,8 +426,6 @@ func ipWrite(tableMap TableMap, stmtMap StmtMap, ad addrData) {
 
 		stmtMap.exec("insert", nameID, ipID)
 	}
-
-	stmtMap.exec("update", registered, nameID)
 }
 
 // `resolverWorker` wrapper to check if a given host is responsive
@@ -762,7 +756,7 @@ func txtResolve(connCache *connCache, msg *dns.Msg, fd *retryWrap[nameData, empt
 		for _, rr := range res.Answer {
 			switch rrT := rr.(type) {
 			case *dns.TXT:
-				results = append(results, rrT.Txt.String())
+				results = append(results, rrT.Txt.BareString())
 			}
 		}
 	}
