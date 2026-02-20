@@ -6,7 +6,6 @@ import (
 	"io/fs"
 	"os"
 	"regexp"
-	"sync"
 
 	"github.com/monoidic/dns"
 )
@@ -16,8 +15,7 @@ type zoneData struct {
 	filename string
 }
 
-func readZonefiles(zoneDataChan <-chan zoneData, rrDataChan chan<- rrData, wg *sync.WaitGroup) {
-	defer wg.Done()
+func readZonefiles(zoneDataChan <-chan zoneData, rrDataChan chan<- rrData) {
 	for zoneD := range zoneDataChan {
 		zoneName, filename := zoneD.zone, zoneD.filename
 		fp := check1(os.Open(filename))
@@ -78,14 +76,7 @@ func parseZoneFiles(db *sql.DB) {
 		close(zoneDataChan)
 	}(matches)
 
-	var wg sync.WaitGroup
-	wg.Add(numProcs)
-
-	for range numProcs {
-		go readZonefiles(zoneDataChan, rrDataChan, &wg)
-	}
-
-	closeChanWait(&wg, rrDataChan)
+	chanWorkers(rrDataChan, numProcs, func() { readZonefiles(zoneDataChan, rrDataChan) })
 
 	insertRRWorker(db, chanToSeq(rrDataChan))
 }

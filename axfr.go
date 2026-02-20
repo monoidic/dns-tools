@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"iter"
 	"strings"
-	"sync"
 
 	"github.com/monoidic/dns"
 )
@@ -65,8 +64,7 @@ func performAxfr(msg dns.Msg, rrDataChan chan<- rrData, ns string) error {
 }
 
 // worker that
-func axfrWorker(zipChan <-chan zoneIP, rrDataChan chan<- rrData, wg *sync.WaitGroup) {
-	defer wg.Done()
+func axfrWorker(zipChan <-chan zoneIP, rrDataChan chan<- rrData) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode: dns.OpcodeQuery,
@@ -127,17 +125,9 @@ func publicAxfrMaster(db *sql.DB, seq iter.Seq[zoneIP]) {
 
 	rrDataChan := make(chan rrData, BUFLEN)
 
-	var wg sync.WaitGroup
-
-	wg.Add(numProcs)
-
 	ch := seqToChan(seq, BUFLEN)
 
-	for range numProcs {
-		go axfrWorker(ch, rrDataChan, &wg)
-	}
-
-	closeChanWait(&wg, rrDataChan)
+	chanWorkers(rrDataChan, numProcs, func() { axfrWorker(ch, rrDataChan) })
 
 	insertRRWorker(db, chanToSeq(rrDataChan))
 }

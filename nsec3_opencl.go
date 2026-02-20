@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"sync"
 	"unsafe"
 
 	_ "embed"
@@ -51,20 +50,13 @@ var openclDevice *cl.OpenCLDevice
 func nsec3HashOpenCL(ctx context.Context, zone, salt []byte, iterations int) <-chan hashEntry {
 	outCh := make(chan hashEntry, MIDBUFLEN)
 	const NUM_WORKERS = 8
-	var wg sync.WaitGroup
-	wg.Add(NUM_WORKERS)
-	closeChanWait(&wg, outCh)
 
-	for range NUM_WORKERS {
-		go nsec3HashOpenCLInner(ctx, zone, salt, iterations, outCh, &wg)
-	}
+	chanWorkers(outCh, NUM_WORKERS, func() { nsec3HashOpenCLInner(ctx, zone, salt, iterations, outCh) })
 
 	return outCh
 }
 
-func nsec3HashOpenCLInner(ctx context.Context, zone, salt []byte, iterations int, outCh chan hashEntry, wg *sync.WaitGroup) {
-	defer wg.Done()
-
+func nsec3HashOpenCLInner(ctx context.Context, zone, salt []byte, iterations int, outCh chan hashEntry) {
 	runner := check1(openclDevice.InitRunner())
 	codes := []string{sha1_cl}
 	kernelNameList := []string{"nsec3_main"}

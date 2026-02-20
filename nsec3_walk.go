@@ -362,29 +362,18 @@ func genHashes(zone, salt []byte, iterations int) iter.Seq[hashEntry] {
 
 func genHashesMulti(ctx context.Context, zone, salt []byte, iterations int) <-chan hashEntry {
 	out := make(chan hashEntry, MIDBUFLEN)
-	var wg sync.WaitGroup
 
-	wg.Add(numProcs)
-
-	go func() {
-		wg.Wait()
-		close(out)
-	}()
-
-	for range numProcs {
-		go func() {
-			for {
-				for e := range genHashes(zone, salt, iterations) {
-					select {
-					case <-ctx.Done():
-						wg.Done()
-						return
-					case out <- e:
-					}
+	chanWorkers(out, numProcs, func() {
+		for {
+			for e := range genHashes(zone, salt, iterations) {
+				select {
+				case <-ctx.Done():
+					return
+				case out <- e:
 				}
 			}
-		}()
-	}
+		}
+	})
 
 	return out
 }
@@ -511,8 +500,8 @@ func nsec3WalkMaster(db *sql.DB, seq iter.Seq[nameData]) {
 	netWriter(db, seq, tablesFields, namesStmts, nsec3WalkWorker, nsec3WalkInsert)
 }
 
-func nsec3WalkWorker(zoneChan <-chan retryWrap[nameData, empty], refeedChan chan<- retryWrap[nameData, empty], dataOutChan chan<- nsec3WalkZone, wg, retryWg *sync.WaitGroup) {
-	resolverWorker(zoneChan, refeedChan, dataOutChan, &dns.Msg{}, nsec3WalkResolve, wg, retryWg)
+func nsec3WalkWorker(zoneChan <-chan retryWrap[nameData, empty], refeedChan chan<- retryWrap[nameData, empty], dataOutChan chan<- nsec3WalkZone, retryWg *sync.WaitGroup) {
+	resolverWorker(zoneChan, refeedChan, dataOutChan, &dns.Msg{}, nsec3WalkResolve, retryWg)
 }
 
 func nsec3WalkInsert(tableMap TableMap, stmtMap StmtMap, zw nsec3WalkZone) {
@@ -594,25 +583,18 @@ func nsec3WalkResolve(connCache *connCache, _ *dns.Msg, zd *retryWrap[nameData, 
 		}
 	}()
 
-	var wg sync.WaitGroup
-	wg.Add(numProcs)
-	closeChanWait(&wg, filteredGuesses)
-
 	// filters
-	for range numProcs {
-		go func() {
-			defer wg.Done()
-			for guess := range producedGuesses {
-				wz.mux.RLock()
-				contains := wz.contains(guess.hash)
-				wz.mux.RUnlock()
+	chanWorkers(filteredGuesses, numProcs, func() {
+		for guess := range producedGuesses {
+			wz.mux.RLock()
+			contains := wz.contains(guess.hash)
+			wz.mux.RUnlock()
 
-				if !contains {
-					filteredGuesses <- guess
-				}
+			if !contains {
+				filteredGuesses <- guess
 			}
-		}()
-	}
+		}
+	})
 
 	var err error
 

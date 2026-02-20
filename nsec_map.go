@@ -111,7 +111,7 @@ func getNsecState(nsecSigs []*dns.NSEC, nsec3Sigs []*dns.NSEC3) (string, string,
 	}
 }
 
-func checkNsecWorker(dataChan <-chan retryWrap[nameData, empty], refeedChan chan<- retryWrap[nameData, empty], outChan chan<- nsecMapResults, wg, retryWg *sync.WaitGroup) {
+func checkNsecWorker(dataChan <-chan retryWrap[nameData, empty], refeedChan chan<- retryWrap[nameData, empty], outChan chan<- nsecMapResults, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -126,7 +126,7 @@ func checkNsecWorker(dataChan <-chan retryWrap[nameData, empty], refeedChan chan
 	msgSetSize(&msg)
 	setOpt(&msg).SetDo()
 
-	resolverWorker(dataChan, refeedChan, outChan, &msg, checkNsecQuery, wg, retryWg)
+	resolverWorker(dataChan, refeedChan, outChan, &msg, checkNsecQuery, retryWg)
 }
 
 func zoneRandomName(zone dns.Name) dns.Name {

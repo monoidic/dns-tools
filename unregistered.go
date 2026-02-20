@@ -15,7 +15,7 @@ type regStatus struct {
 	registered bool
 }
 
-func regMapper(zoneChan <-chan retryWrap[nameData, empty], refeedChan chan<- retryWrap[nameData, empty], outChan chan<- regStatus, wg, retryWg *sync.WaitGroup) {
+func regMapper(zoneChan <-chan retryWrap[nameData, empty], refeedChan chan<- retryWrap[nameData, empty], outChan chan<- regStatus, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -29,7 +29,7 @@ func regMapper(zoneChan <-chan retryWrap[nameData, empty], refeedChan chan<- ret
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(zoneChan, refeedChan, outChan, &msg, regMap, wg, retryWg)
+	resolverWorker(zoneChan, refeedChan, outChan, &msg, regMap, retryWg)
 }
 
 var regMapErr = Error{s: "regmaperr"}

@@ -14,8 +14,8 @@ import (
 )
 
 type (
-	tableWorkerF[inType, resultType, tmpType any]     func(dataChan <-chan retryWrap[inType, tmpType], refeedChan chan<- retryWrap[inType, tmpType], outChan chan<- resultType, wg, retryWg *sync.WaitGroup, tableMap TableMap, stmtMap StmtMap)
-	netWorkerF[inType, resultType, tmpType any]       func(dataChan <-chan retryWrap[inType, tmpType], refeedChan chan<- retryWrap[inType, tmpType], outChan chan<- resultType, wg, retryWg *sync.WaitGroup)
+	tableWorkerF[inType, resultType, tmpType any]     func(dataChan <-chan retryWrap[inType, tmpType], refeedChan chan<- retryWrap[inType, tmpType], outChan chan<- resultType, retryWg *sync.WaitGroup, tableMap TableMap, stmtMap StmtMap)
+	netWorkerF[inType, resultType, tmpType any]       func(dataChan <-chan retryWrap[inType, tmpType], refeedChan chan<- retryWrap[inType, tmpType], outChan chan<- resultType, retryWg *sync.WaitGroup)
 	insertF[resultType any]                           func(tableMap TableMap, stmtMap StmtMap, datum resultType)
 	writerF[inType any]                               func(db *sql.DB, seq iter.Seq[inType])
 	processDataF[inType any, resultType, tmpType any] func(c *connCache, msg *dns.Msg, fd *retryWrap[inType, tmpType]) (resultType, error)
@@ -403,10 +403,9 @@ func msgSetSize(msg *dns.Msg) {
 }
 
 // sets up a connCache and reads in messages from inChan, passes them to the specified `processData` function, and passes the output to outChan
-func resolverWorker[inType, resultType, tmpType any](dataChan <-chan retryWrap[inType, tmpType], refeedChan chan<- retryWrap[inType, tmpType], outChan chan<- resultType, msg *dns.Msg, processData processDataF[inType, resultType, tmpType], wg, retryWg *sync.WaitGroup) {
+func resolverWorker[inType, resultType, tmpType any](dataChan <-chan retryWrap[inType, tmpType], refeedChan chan<- retryWrap[inType, tmpType], outChan chan<- resultType, msg *dns.Msg, processData processDataF[inType, resultType, tmpType], retryWg *sync.WaitGroup) {
 	connCache := getConnCache()
 	defer connCache.clear()
-	defer wg.Done()
 
 	// t := TIMEOUT
 	// client.DialTimeout = t
@@ -441,8 +440,8 @@ func readerWriter[inType any](msg string, db *sql.DB, seq iter.Seq[inType], writ
 
 // wrapper for netWriter for the common case of not needing to perform SQL queries within the resolver
 func netWriter[inType, resultType, tmpType any](db *sql.DB, seq iter.Seq[inType], tablesFields, namesStmts map[string]string, workerF netWorkerF[inType, resultType, tmpType], insertF insertF[resultType]) {
-	wrappedWorkerF := func(dataChan <-chan retryWrap[inType, tmpType], refeedChan chan<- retryWrap[inType, tmpType], outChan chan<- resultType, wg, retryWg *sync.WaitGroup, _ TableMap, _ StmtMap) {
-		workerF(dataChan, refeedChan, outChan, wg, retryWg)
+	wrappedWorkerF := func(dataChan <-chan retryWrap[inType, tmpType], refeedChan chan<- retryWrap[inType, tmpType], outChan chan<- resultType, retryWg *sync.WaitGroup, _ TableMap, _ StmtMap) {
+		workerF(dataChan, refeedChan, outChan, retryWg)
 	}
 	netWriterTable(db, seq, tablesFields, namesStmts, wrappedWorkerF, insertF)
 }
@@ -454,7 +453,7 @@ func netWriterTable[inType, resultType, tmpType any](db *sql.DB, seq iter.Seq[in
 
 	dataOutChan := make(chan resultType, BUFLEN)
 
-	var workerWg, retryWg sync.WaitGroup
+	var retryWg sync.WaitGroup
 
 	inLow, inHigh, out, stop := priorityChanGen[retryWrap[inType, tmpType]]()
 	retryWrapper(bufferedSeq(seq, MIDBUFLEN), inLow, &retryWg)
@@ -469,13 +468,7 @@ func netWriterTable[inType, resultType, tmpType any](db *sql.DB, seq iter.Seq[in
 	tableMap := getTableMap(tablesFields, tx)
 	stmtMap := getStmtMap(namesStmts, tx)
 
-	workerWg.Add(numProcs)
-
-	for range numProcs {
-		go workerF(out, inHigh, dataOutChan, &workerWg, &retryWg, tableMap, stmtMap)
-	}
-
-	closeChanWait(&workerWg, dataOutChan)
+	chanWorkers(dataOutChan, numProcs, func() { workerF(out, inHigh, dataOutChan, &retryWg, tableMap, stmtMap) })
 
 	i := CHUNKSIZE
 
@@ -505,9 +498,7 @@ func netWriterTable[inType, resultType, tmpType any](db *sql.DB, seq iter.Seq[in
 }
 
 func retryWrapper[inType, resultType any](seq iter.Seq[inType], retryChan chan<- retryWrap[inType, resultType], wg *sync.WaitGroup) {
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for val := range seq {
 			wg.Add(1)
 			retryChan <- retryWrap[inType, resultType]{
@@ -515,7 +506,7 @@ func retryWrapper[inType, resultType any](seq iter.Seq[inType], retryChan chan<-
 				retriesLeft: retries,
 			}
 		}
-	}()
+	})
 }
 
 func resolveMX(db *sql.DB) {

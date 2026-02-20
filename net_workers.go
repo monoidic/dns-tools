@@ -429,7 +429,7 @@ func ipWrite(tableMap TableMap, stmtMap StmtMap, ad addrData) {
 }
 
 // `resolverWorker` wrapper to check if a given host is responsive
-func checkUpWorker(inChan <-chan retryWrap[checkUpData, empty], refeedChan chan<- retryWrap[checkUpData, empty], outChan chan<- checkUpData, wg, retryWg *sync.WaitGroup) {
+func checkUpWorker(inChan <-chan retryWrap[checkUpData, empty], refeedChan chan<- retryWrap[checkUpData, empty], outChan chan<- checkUpData, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode: dns.OpcodeQuery,
@@ -442,11 +442,11 @@ func checkUpWorker(inChan <-chan retryWrap[checkUpData, empty], refeedChan chan<
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(inChan, refeedChan, outChan, &msg, checkUpResolve, wg, retryWg)
+	resolverWorker(inChan, refeedChan, outChan, &msg, checkUpResolve, retryWg)
 }
 
 // `resolverWorker` wrapper to perform PTR queries
-func rdnsWorker(inChan <-chan retryWrap[fieldData, empty], refeedChan chan<- retryWrap[fieldData, empty], outChan chan<- rrFdResults[dns.PTR], wg, retryWg *sync.WaitGroup) {
+func rdnsWorker(inChan <-chan retryWrap[fieldData, empty], refeedChan chan<- retryWrap[fieldData, empty], outChan chan<- rrFdResults[dns.PTR], retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -460,11 +460,11 @@ func rdnsWorker(inChan <-chan retryWrap[fieldData, empty], refeedChan chan<- ret
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(inChan, refeedChan, outChan, &msg, rdnsResolve, wg, retryWg)
+	resolverWorker(inChan, refeedChan, outChan, &msg, rdnsResolve, retryWg)
 }
 
 // `resolverWorker` wrapper to perform TXT queries
-func txtWorker(inChan <-chan retryWrap[nameData, empty], refeedChan chan<- retryWrap[nameData, empty], outChan chan<- fdResults, wg, retryWg *sync.WaitGroup) {
+func txtWorker(inChan <-chan retryWrap[nameData, empty], refeedChan chan<- retryWrap[nameData, empty], outChan chan<- fdResults, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -478,11 +478,11 @@ func txtWorker(inChan <-chan retryWrap[nameData, empty], refeedChan chan<- retry
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(inChan, refeedChan, outChan, &msg, txtResolve, wg, retryWg)
+	resolverWorker(inChan, refeedChan, outChan, &msg, txtResolve, retryWg)
 }
 
 // `resolverWorker` wrapper to perform Chaosnet TXT queries
-func chaosTXTWorker(inChan <-chan retryWrap[fieldData, chaosResults], refeedChan chan<- retryWrap[fieldData, chaosResults], outChan chan<- chaosResults, wg, retryWg *sync.WaitGroup) {
+func chaosTXTWorker(inChan <-chan retryWrap[fieldData, chaosResults], refeedChan chan<- retryWrap[fieldData, chaosResults], outChan chan<- chaosResults, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode: dns.OpcodeQuery,
@@ -495,11 +495,11 @@ func chaosTXTWorker(inChan <-chan retryWrap[fieldData, chaosResults], refeedChan
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(inChan, refeedChan, outChan, &msg, chaosTXTResolve, wg, retryWg)
+	resolverWorker(inChan, refeedChan, outChan, &msg, chaosTXTResolve, retryWg)
 }
 
 // `resolverWorker` wrapper to perform NS queries on a parent zone for glue records
-func parentNSResolverWorker(inChan <-chan retryWrap[zoneIP, empty], refeedChan chan<- retryWrap[zoneIP, empty], outChan chan<- parentNSResults, wg, retryWg *sync.WaitGroup) {
+func parentNSResolverWorker(inChan <-chan retryWrap[zoneIP, empty], refeedChan chan<- retryWrap[zoneIP, empty], outChan chan<- parentNSResults, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode: dns.OpcodeQuery,
@@ -512,11 +512,11 @@ func parentNSResolverWorker(inChan <-chan retryWrap[zoneIP, empty], refeedChan c
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(inChan, refeedChan, outChan, &msg, parentNsResolve, wg, retryWg)
+	resolverWorker(inChan, refeedChan, outChan, &msg, parentNsResolve, retryWg)
 }
 
 // `resolverWorker` wrapper to query for arbitrary name:rrtype pairs received from NSEC walking results
-func nsecWalkResultResolver(inChan <-chan retryWrap[rrDBData, empty], refeedChan chan<- retryWrap[rrDBData, empty], outChan chan<- nsecWalkResolveRes, wg, retryWg *sync.WaitGroup) {
+func nsecWalkResultResolver(inChan <-chan retryWrap[rrDBData, empty], refeedChan chan<- retryWrap[rrDBData, empty], outChan chan<- nsecWalkResolveRes, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -529,7 +529,7 @@ func nsecWalkResultResolver(inChan <-chan retryWrap[rrDBData, empty], refeedChan
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(inChan, refeedChan, outChan, &msg, nsecWalkResultResolve, wg, retryWg)
+	resolverWorker(inChan, refeedChan, outChan, &msg, nsecWalkResultResolve, retryWg)
 }
 
 // `processsData` function
@@ -840,7 +840,7 @@ func parentNsResolve(connCache *connCache, msg *dns.Msg, fdr *retryWrap[zoneIP, 
 }
 
 // `resolverWorker` wrapper to perform NS queries
-func nsResolverWorker(dataChan <-chan retryWrap[nameData, empty], refeedChan chan<- retryWrap[nameData, empty], outChan chan<- rrResults[dns.NS], wg, retryWg *sync.WaitGroup) {
+func nsResolverWorker(dataChan <-chan retryWrap[nameData, empty], refeedChan chan<- retryWrap[nameData, empty], outChan chan<- rrResults[dns.NS], retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -854,11 +854,11 @@ func nsResolverWorker(dataChan <-chan retryWrap[nameData, empty], refeedChan cha
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(dataChan, refeedChan, outChan, &msg, nsResolve, wg, retryWg)
+	resolverWorker(dataChan, refeedChan, outChan, &msg, nsResolve, retryWg)
 }
 
 // `resolverWorker` wrapper to perform MX queries
-func mxResolverWorker(dataChan <-chan retryWrap[nameData, empty], refeedChan chan<- retryWrap[nameData, empty], outChan chan<- mxData, wg, retryWg *sync.WaitGroup) {
+func mxResolverWorker(dataChan <-chan retryWrap[nameData, empty], refeedChan chan<- retryWrap[nameData, empty], outChan chan<- mxData, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -872,11 +872,11 @@ func mxResolverWorker(dataChan <-chan retryWrap[nameData, empty], refeedChan cha
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(dataChan, refeedChan, outChan, &msg, mxResolve, wg, retryWg)
+	resolverWorker(dataChan, refeedChan, outChan, &msg, mxResolve, retryWg)
 }
 
 // `resolverWorker` wrapper to perform A/AAAA queries
-func addrResolverWorker(dataChan <-chan retryWrap[nameData, addrData], refeedChan chan<- retryWrap[nameData, addrData], outChan chan<- addrData, wg, retryWg *sync.WaitGroup) {
+func addrResolverWorker(dataChan <-chan retryWrap[nameData, addrData], refeedChan chan<- retryWrap[nameData, addrData], outChan chan<- addrData, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -889,11 +889,11 @@ func addrResolverWorker(dataChan <-chan retryWrap[nameData, addrData], refeedCha
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(dataChan, refeedChan, outChan, &msg, addrResolve, wg, retryWg)
+	resolverWorker(dataChan, refeedChan, outChan, &msg, addrResolve, retryWg)
 }
 
 // `resolverWorker` wrapper to query for zone parents
-func parentCheckWorker(dataChan <-chan retryWrap[childParent, empty], refeedChan chan<- retryWrap[childParent, empty], outChan chan<- childParent, wg, retryWg *sync.WaitGroup, tableMap TableMap, _ StmtMap) {
+func parentCheckWorker(dataChan <-chan retryWrap[childParent, empty], refeedChan chan<- retryWrap[childParent, empty], outChan chan<- childParent, retryWg *sync.WaitGroup, tableMap TableMap, _ StmtMap) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -907,5 +907,5 @@ func parentCheckWorker(dataChan <-chan retryWrap[childParent, empty], refeedChan
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(dataChan, refeedChan, outChan, &msg, parentCheckResolve, wg, retryWg)
+	resolverWorker(dataChan, refeedChan, outChan, &msg, parentCheckResolve, retryWg)
 }

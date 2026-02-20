@@ -15,7 +15,11 @@ import (
 	"github.com/monoidic/dns"
 )
 
-func closeChanWait[T any](wg *sync.WaitGroup, ch chan T) {
+func chanWorkers[T any](ch chan T, n int, f func()) {
+	var wg sync.WaitGroup
+	for range n {
+		wg.Go(f)
+	}
 	go func() {
 		wg.Wait()
 		close(ch)

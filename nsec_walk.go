@@ -90,13 +90,11 @@ func unknownRanges(zone dns.Name, rs *rangeset.RangeSet[dns.Name]) iter.Seq[rang
 	}
 }
 
-func nsecWalkWorker(zoneChan <-chan retryWrap[nameData, empty], refeedChan chan<- retryWrap[nameData, empty], dataOutChan chan<- *walkZone, wg, retryWg *sync.WaitGroup) {
-	resolverWorker(zoneChan, refeedChan, dataOutChan, &dns.Msg{}, nsecWalkResolve, wg, retryWg)
+func nsecWalkWorker(zoneChan <-chan retryWrap[nameData, empty], refeedChan chan<- retryWrap[nameData, empty], dataOutChan chan<- *walkZone, retryWg *sync.WaitGroup) {
+	resolverWorker(zoneChan, refeedChan, dataOutChan, &dns.Msg{}, nsecWalkResolve, retryWg)
 }
 
 func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[dns.Name]) {
-	defer wz.wg.Done()
-
 	zone := wz.zone
 
 	knownRanges := rangeset.RangeSet[dns.Name]{Compare: dns.Compare, HasRWrap: true, RWrapV: zone}
@@ -176,8 +174,7 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[dns.Name]) {
 			continue
 		}
 
-		wz.wg.Add(1)
-		go nsecWalkResolveWorker(wz, rn)
+		wz.wg.Go(func() { nsecWalkResolveWorker(wz, rn) })
 	}
 }
 
@@ -196,8 +193,7 @@ func nsecWalkResolve(_ *connCache, _ *dns.Msg, zd *retryWrap[nameData, empty]) (
 	zone := zd.val.name
 
 	wz.pool.New = func() any { return getConnCache() }
-	wz.wg.Add(1)
-	go nsecWalkResolveWorker(wz, rangeset.RangeEntry[dns.Name]{Start: zone, End: zone})
+	wz.wg.Go(func() { nsecWalkResolveWorker(wz, rangeset.RangeEntry[dns.Name]{Start: zone, End: zone}) })
 	wz.wg.Wait()
 
 	return wz, nil

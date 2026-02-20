@@ -54,13 +54,11 @@ type rrData struct {
 type StmtMap struct {
 	data map[string]*stmtData
 	mx   *sync.RWMutex
-	wg   *sync.WaitGroup
 }
 
 type TableMap struct {
 	data map[string]*tableData
 	mx   *sync.RWMutex
-	wg   *sync.WaitGroup
 }
 
 type rrDBData struct {
@@ -117,7 +115,6 @@ func getTableMap(m map[string]string, tx *sql.Tx) TableMap {
 	return TableMap{
 		data: tableMap,
 		mx:   new(sync.RWMutex),
-		wg:   new(sync.WaitGroup),
 	}
 }
 
@@ -163,14 +160,13 @@ func (tableMap TableMap) roGet(table, key string) int64 {
 }
 
 func (tableMap TableMap) clear() {
-	tableMap.wg.Wait()
 	tableMap.mx.Lock()
 	for _, td := range tableMap.data {
 		td.cleanup()
 		td.cache.Stop()
 		td.cache.DeleteAll()
 	}
-	// tableMap.mx.Unlock()
+	tableMap.mx.Unlock()
 }
 
 func getStmtMap(m map[string]string, tx *sql.Tx) StmtMap {
@@ -184,7 +180,6 @@ func getStmtMap(m map[string]string, tx *sql.Tx) StmtMap {
 	return StmtMap{
 		data: stmtMap,
 		mx:   new(sync.RWMutex),
-		wg:   new(sync.WaitGroup),
 	}
 }
 
@@ -205,12 +200,11 @@ func (stmtMap StmtMap) exec(ident string, args ...any) {
 }
 
 func (stmtMap StmtMap) clear() {
-	stmtMap.wg.Wait()
 	stmtMap.mx.Lock()
 	for _, std := range stmtMap.data {
 		check(std.stmt.Close())
 	}
-	// stmtMap.mx.Unlock()
+	stmtMap.mx.Unlock()
 }
 
 func createInsertF(tx *sql.Tx, tableName string, valueName string) (ttlcache.Option[string, int64], func()) {

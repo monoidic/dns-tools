@@ -6,14 +6,12 @@ import (
 	"io/fs"
 	"iter"
 	"os"
-	"sync"
 
 	"github.com/monoidic/dns"
 )
 
 // parse domain list files
-func readDomainLists(fileChan <-chan string, domainChan chan<- dns.Name, wg *sync.WaitGroup) {
-	defer wg.Done()
+func readDomainLists(fileChan <-chan string, domainChan chan<- dns.Name) {
 	for filename := range fileChan {
 		fp := check1(os.Open(filename))
 
@@ -63,14 +61,7 @@ func parseDomainLists(db *sql.DB) {
 		close(fileChan)
 	}(matches)
 
-	var wg sync.WaitGroup
-	wg.Add(numProcs)
-
-	for range numProcs {
-		go readDomainLists(fileChan, domainChan, &wg)
-	}
-
-	closeChanWait(&wg, domainChan)
+	chanWorkers(domainChan, numProcs, func() { readDomainLists(fileChan, domainChan) })
 
 	insertDomainWorker(db, chanToSeq(domainChan))
 }

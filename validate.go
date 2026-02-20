@@ -34,8 +34,7 @@ type zoneMaybe struct {
 	nxdomain bool
 }
 
-func validMapper(zoneChan <-chan retryWrap[nameData, empty], refeedChan chan<- retryWrap[nameData, empty], outChan chan<- zoneValid, wg, retryWg *sync.WaitGroup) {
-	defer wg.Done()
+func validMapper(zoneChan <-chan retryWrap[nameData, empty], refeedChan chan<- retryWrap[nameData, empty], outChan chan<- zoneValid, retryWg *sync.WaitGroup) {
 	for zdw := range zoneChan {
 		zd := zdw.val
 		if zd.name.String() == "." {
@@ -158,7 +157,7 @@ func maybeZoneWriter(db *sql.DB, seq iter.Seq[nameData]) {
 	netWriter(db, seq, tablesFields, namesStmts, maybeMapper, maybeInsert)
 }
 
-func maybeMapper(fdChan <-chan retryWrap[nameData, empty], refeedChan chan<- retryWrap[nameData, empty], outChan chan<- zoneMaybe, wg, retryWg *sync.WaitGroup) {
+func maybeMapper(fdChan <-chan retryWrap[nameData, empty], refeedChan chan<- retryWrap[nameData, empty], outChan chan<- zoneMaybe, retryWg *sync.WaitGroup) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -172,7 +171,7 @@ func maybeMapper(fdChan <-chan retryWrap[nameData, empty], refeedChan chan<- ret
 	}
 	msgSetSize(&msg)
 
-	resolverWorker(fdChan, refeedChan, outChan, &msg, maybeZoneResolve, wg, retryWg)
+	resolverWorker(fdChan, refeedChan, outChan, &msg, maybeZoneResolve, retryWg)
 }
 
 func maybeZoneResolve(connCache *connCache, msg *dns.Msg, fd *retryWrap[nameData, empty]) (zm zoneMaybe, err error) {
