@@ -13,3 +13,5 @@ __pycache__
 *.svg
 *.dot
 *.pprof
+*.txt
+*.dat

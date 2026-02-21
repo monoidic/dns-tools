@@ -99,7 +99,7 @@ type nsec3WalkZone struct {
 	id          int64
 	knownRanges *rangeset.RangeSet[Nsec3Hash]
 	busyRanges  Set[rangeset.RangeEntry[Nsec3Hash]]
-	rrTypes     map[Nsec3Hash][]string
+	rrTypesCh   chan *dns.NSEC3
 	salt        []byte
 	sem         *semaphore.Weighted
 	mux         *sync.RWMutex
@@ -221,37 +221,26 @@ func (h hashEntry) reconstructLabel() string {
 	return string(out[1:])
 }
 
-func (wz *nsec3WalkZone) addKnown(rn rangeset.RangeEntry[Nsec3Hash], bitmap dns.TypeBitMap) bool {
+func (wz *nsec3WalkZone) addKnown(rr *dns.NSEC3, rn rangeset.RangeEntry[Nsec3Hash]) bool {
 	if bytes.Compare(rn.Start.H[:], rn.End.H[:]) != -1 {
 		// wraparound
-		ret := wz.addKnown(rangeset.RangeEntry[Nsec3Hash]{Start: rn.Start, End: nsec3HashEnd}, bitmap)
-		wz.addKnown(rangeset.RangeEntry[Nsec3Hash]{Start: nsec3HashStart, End: rn.End}, dns.TypeBitMap{})
+		ret := wz.addKnown(rr, rangeset.RangeEntry[Nsec3Hash]{Start: rn.Start, End: nsec3HashEnd})
+		wz.addKnown(rr, rangeset.RangeEntry[Nsec3Hash]{Start: nsec3HashStart, End: rn.End})
 		return ret
 	}
 
-	wz.knownRanges.Mux.Lock()
-	defer wz.knownRanges.Mux.Unlock()
 	if wz.knownRanges.ProtectedContainsRange(rn) {
 		return false
 	}
 
-	wz.knownRanges.Add(rn)
+	wz.knownRanges.ProtectedAdd(rn)
 
 	// do not add nsec3HashStart to known
 	if rn.Start == nsec3HashStart {
 		return true
 	}
 
-	var nsecTypes []string
-	for t := range bitmap.Iter {
-		switch t {
-		case dns.TypeNSEC3, dns.TypeRRSIG: // skip
-		default:
-			nsecTypes = append(nsecTypes, dns.Type(t).String())
-		}
-	}
-
-	wz.rrTypes[rn.Start] = nsecTypes
+	wz.rrTypesCh <- rr
 
 	return true
 }
@@ -519,15 +508,20 @@ func nsec3WalkInsert(tableMap TableMap, stmtMap StmtMap, zw nsec3WalkZone) {
 
 	stmtMap.exec("nsec3_params", zoneID, hexSalt, zw.iterations)
 
-	for rrName, rrtL := range zw.rrTypes {
-		base32.HexEncoding.Encode(buf, rrName.H[:])
+	for rr := range zw.rrTypesCh {
+		start, _ := nsec3RRToHashes(rr)
+		base32.HexEncoding.Encode(buf, start.H[:])
 		hash := string(buf)
 
 		stmtMap.exec("hash", zoneID, hash)
 
-		for _, rrType := range rrtL {
-			rrTypeID := tableMap.get("rr_type", rrType)
-
+	typeLoop:
+		for t := range rr.TypeBitMap.Iter {
+			switch t {
+			case dns.TypeNSEC3, dns.TypeRRSIG:
+				continue typeLoop // skip
+			}
+			rrTypeID := tableMap.get("rr_type", t.String())
 			stmtMap.exec("hash_rrtype", zoneID, hash, rrTypeID)
 		}
 	}
@@ -550,7 +544,7 @@ func nsec3WalkResolve(connCache *connCache, _ *dns.Msg, zd *retryWrap[nameData, 
 		zone:        zd.val.name,
 		splitZone:   zd.val.name.SplitRaw(),
 		id:          zd.val.id,
-		rrTypes:     make(map[Nsec3Hash][]string),
+		rrTypesCh:   make(chan *dns.NSEC3),
 		knownRanges: &rangeset.RangeSet[Nsec3Hash]{Compare: nsec3Compare},
 		busyRanges:  make(Set[rangeset.RangeEntry[Nsec3Hash]]),
 		mux:         &sync.RWMutex{},
@@ -690,15 +684,12 @@ func processGuess(wz *nsec3WalkZone, cancel context.CancelFunc, guess hashEntry,
 
 			entries = append(entries, rangeset.RangeEntry[Nsec3Hash]{Start: start, End: end})
 			bitmaps = append(bitmaps, rrT.TypeBitMap)
+
+			entry := rangeset.RangeEntry[Nsec3Hash]{Start: start, End: end}
+
+			wz.addKnown(rrT, entry)
 		}
 	}
-
-	wz.mux.Lock()
-	for i, entry := range entries {
-		bitmap := bitmaps[i]
-		wz.addKnown(entry, bitmap)
-	}
-	wz.mux.Unlock()
 
 	if !sawThis {
 		fmt.Printf("expected to see something covering hashName=%s hash=%s did not\n", hashName, guess.hash)
@@ -722,7 +713,7 @@ func processGuess(wz *nsec3WalkZone, cancel context.CancelFunc, guess hashEntry,
 
 	wz.mux.RLock()
 	defer wz.mux.RUnlock()
-	fmt.Printf("zone=%s %d ranges %d known names %s zone discovered\n", wz.zone, len(wz.knownRanges.Ranges), len(wz.rrTypes), wz.percentDiscovered())
+	fmt.Printf("zone=%s %d ranges %s zone discovered\n", wz.zone, len(wz.knownRanges.Ranges), wz.percentDiscovered())
 
 	if len(wz.knownRanges.Ranges) < 100 {
 		fmt.Println(wz.String())
@@ -732,6 +723,7 @@ func processGuess(wz *nsec3WalkZone, cancel context.CancelFunc, guess hashEntry,
 		rn := wz.knownRanges.Ranges[0]
 		if rn.Start == nsec3HashStart && rn.End == nsec3HashEnd {
 			cancel()
+			close(wz.rrTypesCh)
 		}
 	}
 }
