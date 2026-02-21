@@ -97,7 +97,7 @@ var nsec3HashEnd = Nsec3Hash{H: [20]byte{
 type nsec3WalkZone struct {
 	zone        dns.Name
 	id          int64
-	knownRanges rangeset.RangeSet[Nsec3Hash]
+	knownRanges *rangeset.RangeSet[Nsec3Hash]
 	busyRanges  Set[rangeset.RangeEntry[Nsec3Hash]]
 	rrTypes     map[Nsec3Hash][]string
 	salt        []byte
@@ -110,7 +110,7 @@ type nsec3WalkZone struct {
 }
 
 func (wz *nsec3WalkZone) contains(hash Nsec3Hash) bool {
-	if wz.knownRanges.Contains(hash) {
+	if wz.knownRanges.ProtectedContains(hash) {
 		return true
 	}
 	enclosing := wz.enclosingKnownRange(hash)
@@ -119,6 +119,8 @@ func (wz *nsec3WalkZone) contains(hash Nsec3Hash) bool {
 
 func (wz *nsec3WalkZone) enclosingKnownRange(hash Nsec3Hash) rangeset.RangeEntry[Nsec3Hash] {
 	var ret rangeset.RangeEntry[Nsec3Hash]
+	wz.knownRanges.Mux.RLock()
+	defer wz.knownRanges.Mux.RUnlock()
 	if len(wz.knownRanges.Ranges) == 0 {
 		ret.Start = nsec3HashStart
 		ret.End = nsec3HashEnd
@@ -169,6 +171,8 @@ func nsec3Total() *big.Int {
 
 func (wz *nsec3WalkZone) sizeKnown() *big.Int {
 	total := big.NewInt(0)
+	wz.knownRanges.Mux.RLock()
+	defer wz.knownRanges.Mux.RUnlock()
 	for _, nsecRange := range wz.knownRanges.Ranges {
 		start := nsecRange.Start.toNum()
 		end := nsecRange.End.toNum()
@@ -225,7 +229,9 @@ func (wz *nsec3WalkZone) addKnown(rn rangeset.RangeEntry[Nsec3Hash], bitmap dns.
 		return ret
 	}
 
-	if wz.knownRanges.ContainsRange(rn) {
+	wz.knownRanges.Mux.Lock()
+	defer wz.knownRanges.Mux.Unlock()
+	if wz.knownRanges.ProtectedContainsRange(rn) {
 		return false
 	}
 
@@ -545,7 +551,7 @@ func nsec3WalkResolve(connCache *connCache, _ *dns.Msg, zd *retryWrap[nameData, 
 		splitZone:   zd.val.name.SplitRaw(),
 		id:          zd.val.id,
 		rrTypes:     make(map[Nsec3Hash][]string),
-		knownRanges: rangeset.RangeSet[Nsec3Hash]{Compare: nsec3Compare},
+		knownRanges: &rangeset.RangeSet[Nsec3Hash]{Compare: nsec3Compare},
 		busyRanges:  make(Set[rangeset.RangeEntry[Nsec3Hash]]),
 		mux:         &sync.RWMutex{},
 		sem:         semaphore.NewWeighted(1000),
@@ -714,6 +720,8 @@ func processGuess(wz *nsec3WalkZone, cancel context.CancelFunc, guess hashEntry,
 		}
 	*/
 
+	wz.mux.RLock()
+	defer wz.mux.RUnlock()
 	fmt.Printf("zone=%s %d ranges %d known names %s zone discovered\n", wz.zone, len(wz.knownRanges.Ranges), len(wz.rrTypes), wz.percentDiscovered())
 
 	if len(wz.knownRanges.Ranges) < 100 {

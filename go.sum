@@ -10,8 +10,8 @@ github.com/mattn/go-sqlite3 v1.14.34 h1:3NtcvcUnFBPsuRcno8pUtupspG/GM+9nZ88zgJcp
 github.com/mattn/go-sqlite3 v1.14.34/go.mod h1:Uh1q+B4BYcTPb+yiD3kU8Ct7aC0hY9fxUwlHK0RXw+Y=
 github.com/monoidic/dns v1.1.72 h1:/94BgyDrJzdUtHIKM7npjCsE78iNfm93Hf+Y3h1pPd0=
 github.com/monoidic/dns v1.1.72/go.mod h1:S4Yh/snMVUXtBFlxSGLZrkOikXPapGRItAoWkAbuTqE=
-github.com/monoidic/rangeset v0.0.0-20240518201828-b04bb4bbbf23 h1:C8JnL+VBh3b3qo4M6TaSkJjsCxnr317xDb5THZAi2+M=
-github.com/monoidic/rangeset v0.0.0-20240518201828-b04bb4bbbf23/go.mod h1:sMBefMSiMzUq/n5SjdFRsvpbprlMEdfxq39l6UvG8vw=
+github.com/monoidic/rangeset v1.0.0 h1:7C2IIobue0cFmnH1Zom8/RQhgqnQ1P1mc5arW56EDKY=
+github.com/monoidic/rangeset v1.0.0/go.mod h1:sMBefMSiMzUq/n5SjdFRsvpbprlMEdfxq39l6UvG8vw=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/stretchr/testify v1.10.0 h1:Xv5erBjTwe/5IxqUQTdXv5kgmIvbHo3QQyRwhJsOfJA=
