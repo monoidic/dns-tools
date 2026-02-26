@@ -13,7 +13,7 @@ import (
 	"github.com/monoidic/dns"
 )
 
-type rrF[rrType any] func(tableMap TableMap, stmtMap StmtMap, rrD rrType)
+type rrF[rrType any] func(tsm *TableStmtMap, rrD rrType)
 
 //go:embed db_init.sql
 var initStmtsRaw string
@@ -51,14 +51,11 @@ type rrData struct {
 	selfZone   bool
 }
 
-type StmtMap struct {
-	data map[string]*stmtData
-	mx   *sync.RWMutex
-}
-
-type TableMap struct {
-	data map[string]*tableData
-	mx   *sync.RWMutex
+type TableStmtMap struct {
+	tableMap map[string]*tableData
+	stmtMap  map[string]*stmtData
+	mx       sync.RWMutex
+	tx       *sql.Tx
 }
 
 type rrDBData struct {
@@ -78,15 +75,89 @@ type nsecWalkResolveRes struct {
 func initDb(db *sql.DB) {
 	tx := check1(db.Begin())
 
-	for _, stmt := range strings.Split(initStmtsRaw, ";\n") {
+	for stmt := range strings.SplitSeq(initStmtsRaw, ";\n") {
 		check1(tx.Exec(stmt))
 	}
 
 	check(tx.Commit())
 }
 
-func getTableMap(m map[string]string, tx *sql.Tx) TableMap {
-	tableMap := make(map[string]*tableData)
+func getTableStmtMap(tablesFields, namesStmts map[string]string, tx *sql.Tx) *TableStmtMap {
+	return &TableStmtMap{
+		tableMap: getTableMap(tablesFields, tx),
+		stmtMap:  getStmtMap(namesStmts, tx),
+		tx:       tx,
+	}
+}
+
+func (tsm *TableStmtMap) update(tx *sql.Tx) {
+	// needs lock to be locked externally
+	tsm.tx = tx
+
+	for tableName, td := range tsm.tableMap {
+		td.cleanup()
+		var rwCleanup, roCleanup func()
+		td.loader, rwCleanup = createInsertF(tx, tableName, td.fieldName)
+		td.roLoader, roCleanup = createROGetF(tx, tableName, td.fieldName)
+		td.cleanup = func() {
+			rwCleanup()
+			roCleanup()
+		}
+	}
+
+	for _, std := range tsm.stmtMap {
+		check(std.stmt.Close())
+		std.stmt = check1(tx.Prepare(std.query))
+	}
+}
+
+func (tsm *TableStmtMap) get(table, key string) int64 {
+	tsm.mx.RLock()
+	defer tsm.mx.RUnlock()
+
+	td := tsm.tableMap[table]
+	ret := td.cache.Get(key, td.loader).Value()
+
+	return ret
+}
+
+func (tsm *TableStmtMap) roGet(table, key string) int64 {
+	var ret int64
+
+	tsm.mx.RLock()
+	defer tsm.mx.RUnlock()
+
+	td := tsm.tableMap[table]
+	if item := td.cache.Get(key, td.roLoader); item != nil {
+		ret = item.Value()
+	}
+
+	return ret
+}
+
+func (tsm *TableStmtMap) clear() {
+	tsm.mx.Lock()
+	defer tsm.mx.Unlock()
+
+	for _, td := range tsm.tableMap {
+		td.cleanup()
+		td.cache.Stop()
+		td.cache.DeleteAll()
+	}
+
+	for _, std := range tsm.stmtMap {
+		check(std.stmt.Close())
+	}
+}
+
+func (tsm *TableStmtMap) exec(ident string, args ...any) {
+	tsm.mx.RLock()
+	defer tsm.mx.RUnlock()
+	check1(tsm.stmtMap[ident].stmt.Exec(args...))
+}
+
+func getTableMap(m map[string]string, tx *sql.Tx) map[string]*tableData {
+	tableMap := make(map[string]*tableData, len(m))
 
 	for tableName, fieldName := range m {
 		getF, rwCleanup := createInsertF(tx, tableName, fieldName)
@@ -112,99 +183,18 @@ func getTableMap(m map[string]string, tx *sql.Tx) TableMap {
 		}
 	}
 
-	return TableMap{
-		data: tableMap,
-		mx:   new(sync.RWMutex),
-	}
+	return tableMap
 }
 
-func (tableMap TableMap) update(tx *sql.Tx) {
-	// needs lock to be locked externally
-
-	for tableName, td := range tableMap.data {
-		td.cleanup()
-		var rwCleanup, roCleanup func()
-		td.loader, rwCleanup = createInsertF(tx, tableName, td.fieldName)
-		td.roLoader, roCleanup = createROGetF(tx, tableName, td.fieldName)
-		td.cleanup = func() {
-			rwCleanup()
-			roCleanup()
-		}
-	}
-}
-
-func (tableMap TableMap) get(table, key string) int64 {
-	tableMap.mx.RLock()
-
-	td := tableMap.data[table]
-	ret := td.cache.Get(key, td.loader).Value()
-
-	tableMap.mx.RUnlock()
-
-	return ret
-}
-
-func (tableMap TableMap) roGet(table, key string) int64 {
-	var ret int64
-
-	tableMap.mx.RLock()
-
-	td := tableMap.data[table]
-	if item := td.cache.Get(key, td.roLoader); item != nil {
-		ret = item.Value()
-	}
-
-	tableMap.mx.RUnlock()
-
-	return ret
-}
-
-func (tableMap TableMap) clear() {
-	tableMap.mx.Lock()
-	for _, td := range tableMap.data {
-		td.cleanup()
-		td.cache.Stop()
-		td.cache.DeleteAll()
-	}
-	tableMap.mx.Unlock()
-}
-
-func getStmtMap(m map[string]string, tx *sql.Tx) StmtMap {
-	stmtMap := make(map[string]*stmtData)
+func getStmtMap(m map[string]string, tx *sql.Tx) map[string]*stmtData {
+	stmtMap := make(map[string]*stmtData, len(m))
 
 	for name, query := range m {
 		stmt := check1(tx.Prepare(query))
 		stmtMap[name] = &stmtData{stmt: stmt, query: query}
 	}
 
-	return StmtMap{
-		data: stmtMap,
-		mx:   new(sync.RWMutex),
-	}
-}
-
-// needs lock to be locked externally
-func (stmtMap StmtMap) update(tx *sql.Tx) {
-	for _, std := range stmtMap.data {
-		check(std.stmt.Close())
-		std.stmt = check1(tx.Prepare(std.query))
-	}
-}
-
-func (stmtMap StmtMap) exec(ident string, args ...any) {
-	stmtMap.mx.RLock()
-
-	check1(stmtMap.data[ident].stmt.Exec(args...))
-
-	stmtMap.mx.RUnlock()
-}
-
-func (stmtMap StmtMap) clear() {
-	stmtMap.mx.Lock()
-	for _, std := range stmtMap.data {
-		check(std.stmt.Close())
-	}
-	stmtMap.mx.Unlock()
+	return stmtMap
 }
 
 func createInsertF(tx *sql.Tx, tableName string, valueName string) (ttlcache.Option[string, int64], func()) {
@@ -262,8 +252,7 @@ func createROGetF(tx *sql.Tx, tableName string, valueName string) (ttlcache.Opti
 func insertRR[rrType any](db *sql.DB, seq iter.Seq[rrType], tablesFields, namesStmts map[string]string, rrF rrF[rrType]) {
 	tx := check1(db.Begin())
 
-	tableMap := getTableMap(tablesFields, tx)
-	stmtMap := getStmtMap(namesStmts, tx)
+	tsm := getTableStmtMap(tablesFields, namesStmts, tx)
 
 	i := CHUNKSIZE
 
@@ -271,43 +260,42 @@ func insertRR[rrType any](db *sql.DB, seq iter.Seq[rrType], tablesFields, namesS
 		if i == 0 {
 			i = CHUNKSIZE
 
-			tableMap.mx.Lock()
-			stmtMap.mx.Lock()
+			tsm.mx.Lock()
 
 			check(tx.Commit())
 			tx = check1(db.Begin())
 
-			tableMap.update(tx)
-			stmtMap.update(tx)
+			tsm.update(tx)
 
-			stmtMap.mx.Unlock()
-			tableMap.mx.Unlock()
+			tsm.mx.Unlock()
 		}
 		i--
 
-		rrF(tableMap, stmtMap, rrD)
+		rrF(tsm, rrD)
 	}
 
-	tableMap.clear()
-	stmtMap.clear()
+	tsm.clear()
 	check(tx.Commit())
 }
 
 func getZone2RR(filter string, db *sql.DB) iter.Seq[rrDBData] {
 	return func(yield func(rrDBData) bool) {
+		qs := fmt.Sprintf(`
+			SELECT
+				zone2rr.id, zone2rr.from_parent, zone2rr.from_self,
+				rr_type.name, rr_type.id,
+				rr_name.name, rr_name.id,
+				rr_value.value, rr_value.id
+			FROM zone2rr
+			INNER JOIN rr_type ON zone2rr.rr_type_id=rr_type.id
+			INNER JOIN rr_name ON zone2rr.rr_name_id=rr_name.id
+			INNER JOIN rr_value ON zone2rr.rr_value_id=rr_value.id
+			WHERE zone2rr.parsed=FALSE AND %s
+		`, filter)
 		tx := check1(db.Begin())
-		rows := check1(tx.Query(fmt.Sprintf(`
-		SELECT
-			zone2rr.id, zone2rr.from_parent, zone2rr.from_self,
-			rr_type.name, rr_type.id,
-			rr_name.name, rr_name.id,
-			rr_value.value, rr_value.id
-		FROM zone2rr
-		INNER JOIN rr_type ON zone2rr.rr_type_id=rr_type.id
-		INNER JOIN rr_name ON zone2rr.rr_name_id=rr_name.id
-		INNER JOIN rr_value ON zone2rr.rr_value_id=rr_value.id
-		WHERE zone2rr.parsed=FALSE AND %s
-	`, filter)))
+		defer tx.Commit()
+		rows := check1(tx.Query(qs))
+		defer rows.Close()
 
 		for rows.Next() {
 			var ad rrDBData
@@ -320,18 +308,16 @@ func getZone2RR(filter string, db *sql.DB) iter.Seq[rrDBData] {
 			))
 			ad.rrName.name = mustParseName(rrName)
 			if !yield(ad) {
-				break
+				return
 			}
 		}
-
-		check(rows.Close())
-		check(tx.Commit())
 	}
 }
 
 func getUnqueriedNsecRes(db *sql.DB) iter.Seq[rrDBData] {
 	return func(yield func(rrDBData) bool) {
 		tx := check1(db.Begin())
+		defer tx.Commit()
 		rows := check1(tx.Query(`
 		SELECT
 			zone_walk_res.zone_id, zone_walk_res.id,
@@ -342,6 +328,7 @@ func getUnqueriedNsecRes(db *sql.DB) iter.Seq[rrDBData] {
 		INNER JOIN rr_name ON zone_walk_res.rr_name_id=rr_name.id
 		WHERE zone_walk_res.queried=FALSE
 	`))
+		defer rows.Close()
 
 		for rows.Next() {
 			rrD := rrDBData{fromSelf: true}
@@ -353,12 +340,9 @@ func getUnqueriedNsecRes(db *sql.DB) iter.Seq[rrDBData] {
 			))
 			rrD.rrName.name = mustParseName(rrName)
 			if !yield(rrD) {
-				break
+				return
 			}
 		}
-
-		check(rows.Close())
-		check(tx.Commit())
 	}
 }
 

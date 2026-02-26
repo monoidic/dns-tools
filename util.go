@@ -43,7 +43,7 @@ func (s Set[T]) Delete(key T) {
 
 func (s Set[T]) String() string {
 	var b strings.Builder
-	check1(b.WriteString(reflect.TypeOf(s).Name())) // e.g "Set[string]"
+	check1(b.WriteString(reflect.TypeFor[Set[T]]().Name())) // e.g "Set[string]"
 	check(b.WriteByte('{'))
 
 	var addComma bool
@@ -54,7 +54,7 @@ func (s Set[T]) String() string {
 		} else {
 			addComma = true
 		}
-		check1(b.WriteString(fmt.Sprintf("\"%#v\"", e)))
+		check1(fmt.Fprintf(&b, "%#v", e))
 	}
 
 	b.WriteByte('}')
@@ -170,12 +170,12 @@ func splitAscii(start, end *big.Int, n, length int) iter.Seq[string] {
 			nBig.SetInt64(int64(n)),
 		)
 
-		for i := 1; i < n; i++ {
+		for i := range n - 1 {
 			// itNum = start + i * diff
-			itNum.Add(start, itNum.Mul(&diff, iBig.SetInt64(int64(i))))
+			itNum.Add(start, itNum.Mul(&diff, iBig.SetInt64(int64(i+1))))
 			s := numToLabel(&itNum, length)
 			if !yield(s) {
-				break
+				return
 			}
 		}
 	}
@@ -234,12 +234,14 @@ func bufferedSeq[T any](seq iter.Seq[T], bufsize int) iter.Seq[T] {
 	}()
 
 	return func(yield func(T) bool) {
+		defer func() {
+			done = true
+		}()
 		for e := range ch {
 			if !yield(e) {
-				break
+				return
 			}
 		}
-		done = true
 	}
 }
 

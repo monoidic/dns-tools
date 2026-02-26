@@ -88,7 +88,7 @@ func validWriter(db *sql.DB, seq iter.Seq[nameData]) {
 	netWriter(db, seq, tablesFields, namesStmts, validMapper, validInsert)
 }
 
-func validInsert(tableMap TableMap, stmtMap StmtMap, zv zoneValid) {
+func validInsert(tsm *TableStmtMap, zv zoneValid) {
 	var valid bool
 	switch zv.status {
 	case invalidTLD:
@@ -97,10 +97,10 @@ func validInsert(tableMap TableMap, stmtMap StmtMap, zv zoneValid) {
 	default:
 		valid = true
 	}
-	stmtMap.exec("validation", valid, zv.id)
-	etldp1ID := tableMap.get("name", zv.eTLDplus1)
-	stmtMap.exec("etldp1", etldp1ID, zv.id)
-	stmtMap.exec("maybe_zone", etldp1ID)
+	tsm.exec("validation", valid, zv.id)
+	etldp1ID := tsm.get("name", zv.eTLDplus1)
+	tsm.exec("etldp1", etldp1ID, zv.id)
+	tsm.exec("maybe_zone", etldp1ID)
 }
 
 func getTLDs(yield func(dns.Name) bool) {
@@ -140,9 +140,9 @@ func tldListWriter(db *sql.DB, seq iter.Seq[dns.Name]) {
 	insertRR(db, seq, tablesFields, namesStmts, tldListInsert)
 }
 
-func tldListInsert(tableMap TableMap, stmtMap StmtMap, tld dns.Name) {
-	tldID := tableMap.get("name", tld.String())
-	stmtMap.exec("maybe_zone", tldID)
+func tldListInsert(tsm *TableStmtMap, tld dns.Name) {
+	tldID := tsm.get("name", tld.String())
+	tsm.exec("maybe_zone", tldID)
 }
 
 func maybeZoneWriter(db *sql.DB, seq iter.Seq[nameData]) {
@@ -206,11 +206,11 @@ maybeZoneResolveL:
 	return
 }
 
-func maybeInsert(_ TableMap, stmtMap StmtMap, zm zoneMaybe) {
+func maybeInsert(tsm *TableStmtMap, zm zoneMaybe) {
 	if zm.servfail {
-		stmtMap.exec("servfail", zm.id)
+		tsm.exec("servfail", zm.id)
 	} else {
-		stmtMap.exec("zone_status", zm.isZone, !zm.nxdomain, zm.id)
+		tsm.exec("zone_status", zm.isZone, !zm.nxdomain, zm.id)
 	}
 }
 

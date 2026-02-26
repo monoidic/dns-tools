@@ -95,6 +95,16 @@ var (
 )
 
 func main() {
+	db, funcs := getArgs()
+
+	for _, f := range funcs {
+		f(db)
+	}
+
+	check(db.Close())
+}
+
+func getArgs() (*sql.DB, []func(*sql.DB)) {
 	flagsCheck()
 	for flagName, flagD := range flags {
 		flag.BoolVar(&flagD.doAction, flagName, false, flagD.description)
@@ -157,13 +167,15 @@ func main() {
 
 	initDb(db)
 
+	var funcs []func(*sql.DB)
+
 	for _, flagKey := range flagOrder {
 		if flagD := flags[flagKey]; flagD.doAction {
-			flagD.function(db)
+			funcs = append(funcs, flagD.function)
 		}
 	}
 
-	check(db.Close())
+	return db, funcs
 }
 
 func anyFlagSet() bool {

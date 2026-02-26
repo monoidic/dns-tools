@@ -244,20 +244,20 @@ func checkNsecMaster(db *sql.DB, seq iter.Seq[nameData]) {
 	netWriter(db, seq, tablesFields, namesStmts, checkNsecWorker, checkNsecInsert)
 }
 
-func checkNsecInsert(tableMap TableMap, stmtMap StmtMap, nmr nsecMapResults) {
+func checkNsecInsert(tsm *TableStmtMap, nmr nsecMapResults) {
 	zoneID := nmr.zoneID
 
-	defer stmtMap.exec("update", zoneID)
+	defer tsm.exec("update", zoneID)
 
 	if !nmr.success { // fetch failure
 		return
 	}
 
-	nsecStateID := tableMap.roGet("nsec_state", nmr.nsecState)
-	rnameID := tableMap.get("rname", nmr.rname.String())
-	mnameID := tableMap.get("mname", nmr.mname.String())
+	nsecStateID := tsm.roGet("nsec_state", nmr.nsecState)
+	rnameID := tsm.get("rname", nmr.rname.String())
+	mnameID := tsm.get("mname", nmr.mname.String())
 
-	stmtMap.exec("insert", zoneID, nsecStateID, rnameID, mnameID, nmr.nsecS, nmr.optout)
+	tsm.exec("insert", zoneID, nsecStateID, rnameID, mnameID, nmr.nsecS, nmr.optout)
 }
 
 func checkNsec(db *sql.DB) {

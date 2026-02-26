@@ -14,9 +14,9 @@ import (
 )
 
 type (
-	tableWorkerF[inType, resultType, tmpType any]     func(dataChan <-chan retryWrap[inType, tmpType], refeedChan chan<- retryWrap[inType, tmpType], outChan chan<- resultType, retryWg *sync.WaitGroup, tableMap TableMap, stmtMap StmtMap)
+	tableWorkerF[inType, resultType, tmpType any]     func(dataChan <-chan retryWrap[inType, tmpType], refeedChan chan<- retryWrap[inType, tmpType], outChan chan<- resultType, retryWg *sync.WaitGroup, tsm *TableStmtMap)
 	netWorkerF[inType, resultType, tmpType any]       func(dataChan <-chan retryWrap[inType, tmpType], refeedChan chan<- retryWrap[inType, tmpType], outChan chan<- resultType, retryWg *sync.WaitGroup)
-	insertF[resultType any]                           func(tableMap TableMap, stmtMap StmtMap, datum resultType)
+	insertF[resultType any]                           func(tsm *TableStmtMap, datum resultType)
 	writerF[inType any]                               func(db *sql.DB, seq iter.Seq[inType])
 	processDataF[inType any, resultType, tmpType any] func(c *connCache, msg *dns.Msg, fd *retryWrap[inType, tmpType]) (resultType, error)
 )
@@ -440,7 +440,7 @@ func readerWriter[inType any](msg string, db *sql.DB, seq iter.Seq[inType], writ
 
 // wrapper for netWriter for the common case of not needing to perform SQL queries within the resolver
 func netWriter[inType, resultType, tmpType any](db *sql.DB, seq iter.Seq[inType], tablesFields, namesStmts map[string]string, workerF netWorkerF[inType, resultType, tmpType], insertF insertF[resultType]) {
-	wrappedWorkerF := func(dataChan <-chan retryWrap[inType, tmpType], refeedChan chan<- retryWrap[inType, tmpType], outChan chan<- resultType, retryWg *sync.WaitGroup, _ TableMap, _ StmtMap) {
+	wrappedWorkerF := func(dataChan <-chan retryWrap[inType, tmpType], refeedChan chan<- retryWrap[inType, tmpType], outChan chan<- resultType, retryWg *sync.WaitGroup, _ *TableStmtMap) {
 		workerF(dataChan, refeedChan, outChan, retryWg)
 	}
 	netWriterTable(db, seq, tablesFields, namesStmts, wrappedWorkerF, insertF)
@@ -465,35 +465,30 @@ func netWriterTable[inType, resultType, tmpType any](db *sql.DB, seq iter.Seq[in
 
 	tx := check1(db.Begin())
 
-	tableMap := getTableMap(tablesFields, tx)
-	stmtMap := getStmtMap(namesStmts, tx)
+	tsm := getTableStmtMap(tablesFields, namesStmts, tx)
 
-	chanWorkers(dataOutChan, numProcs, func() { workerF(out, inHigh, dataOutChan, &retryWg, tableMap, stmtMap) })
+	chanWorkers(dataOutChan, numProcs, func() { workerF(out, inHigh, dataOutChan, &retryWg, tsm) })
 
 	i := CHUNKSIZE
 
 	for datum := range dataOutChan {
 		if i == 0 {
 			i = CHUNKSIZE
-			tableMap.mx.Lock()
-			stmtMap.mx.Lock()
+			tsm.mx.Lock()
 
 			check(tx.Commit())
 			tx = check1(db.Begin())
 
-			tableMap.update(tx)
-			stmtMap.update(tx)
+			tsm.update(tx)
 
-			stmtMap.mx.Unlock()
-			tableMap.mx.Unlock()
+			tsm.mx.Unlock()
 		}
 		i--
 
-		insertF(tableMap, stmtMap, datum)
+		insertF(tsm, datum)
 	}
 
-	tableMap.clear()
-	stmtMap.clear()
+	tsm.clear()
 	check(tx.Commit())
 }
 

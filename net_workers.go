@@ -28,17 +28,17 @@ func mxWriter(db *sql.DB, seq iter.Seq[nameData]) {
 }
 
 // `insertF` for MX
-func mxWrite(tableMap TableMap, stmtMap StmtMap, mxd mxData) {
+func mxWrite(tsm *TableStmtMap, mxd mxData) {
 	zoneID := mxd.id
-	defer stmtMap.exec("update", mxd.registered, zoneID)
+	defer tsm.exec("update", mxd.registered, zoneID)
 
 	if len(mxd.results) > 0 {
-		rrTypeID := tableMap.get("rr_type", "MX")
-		rrNameID := tableMap.get("rr_name", mxd.name.String())
+		rrTypeID := tsm.get("rr_type", "MX")
+		rrNameID := tsm.get("rr_name", mxd.name.String())
 
 		for _, mx := range mxd.results {
-			rrValueID := tableMap.get("rr_value", mx.String())
-			stmtMap.exec("zone2rr", zoneID, rrTypeID, rrNameID, rrValueID)
+			rrValueID := tsm.get("rr_value", mx.String())
+			tsm.exec("zone2rr", zoneID, rrTypeID, rrNameID, rrValueID)
 		}
 	}
 }
@@ -54,8 +54,8 @@ func checkUpWriter(db *sql.DB, seq iter.Seq[checkUpData]) {
 }
 
 // `insertF` for active nameservers
-func checkUpWrite(_ TableMap, stmtMap StmtMap, cu checkUpData) {
-	stmtMap.exec("update", cu.success, cu.ipID)
+func checkUpWrite(tsm *TableStmtMap, cu checkUpData) {
+	tsm.exec("update", cu.success, cu.ipID)
 }
 
 // `netWriter` wrapper for PTR queries
@@ -75,20 +75,20 @@ func rdnsWriter(db *sql.DB, seq iter.Seq[fieldData]) {
 }
 
 // `insertF` for PTR
-func rdnsWrite(tableMap TableMap, stmtMap StmtMap, fdr rrFdResults[dns.PTR]) {
+func rdnsWrite(tsm *TableStmtMap, fdr rrFdResults[dns.PTR]) {
 	ipID := fdr.id
-	defer stmtMap.exec("mapped", ipID)
+	defer tsm.exec("mapped", ipID)
 
 	if len(fdr.results) == 0 {
 		return
 	}
-	rrTypeID := tableMap.get("rr_type", "PTR")
+	rrTypeID := tsm.get("rr_type", "PTR")
 
 	for _, ptr := range fdr.results {
-		rrNameID := tableMap.get("rr_name", ptr.Hdr.Name.String())
-		rrValueID := tableMap.get("rr_value", ptr.String())
+		rrNameID := tsm.get("rr_name", ptr.Hdr.Name.String())
+		rrValueID := tsm.get("rr_value", ptr.String())
 
-		stmtMap.exec("zone2rr", fdr.id, rrTypeID, rrNameID, rrValueID)
+		tsm.exec("zone2rr", fdr.id, rrTypeID, rrNameID, rrValueID)
 	}
 }
 
@@ -110,9 +110,9 @@ func spfRRWriter(db *sql.DB, seq iter.Seq[nameData]) {
 }
 
 // `insertF` for SPF TXT
-func spfWrite(tableMap TableMap, stmtMap StmtMap, fdr fdResults) {
+func spfWrite(tsm *TableStmtMap, fdr fdResults) {
 	nameID := fdr.id
-	defer stmtMap.exec("spf_tried", nameID)
+	defer tsm.exec("spf_tried", nameID)
 
 	var spfRecords []string
 
@@ -123,10 +123,10 @@ func spfWrite(tableMap TableMap, stmtMap StmtMap, fdr fdResults) {
 	}
 
 	for _, s := range spfRecords {
-		recordID := tableMap.get("spf_record", s)
-		stmtMap.exec("spf", nameID, recordID)
+		recordID := tsm.get("spf_record", s)
+		tsm.exec("spf", nameID, recordID)
 		if len(spfRecords) > 1 {
-			stmtMap.exec("spf_duplicate", nameID, recordID)
+			tsm.exec("spf_duplicate", nameID, recordID)
 		}
 
 		data, err := parseSPF([]byte(s))
@@ -134,13 +134,13 @@ func spfWrite(tableMap TableMap, stmtMap StmtMap, fdr fdResults) {
 		if err != nil {
 			err_s = err.Error()
 		}
-		stmtMap.exec("spf_valid", err == nil, data.anyUnknown, err_s, recordID)
+		tsm.exec("spf_valid", err == nil, data.anyUnknown, err_s, recordID)
 		if err == nil {
 			for i, list := range [][]string{data.names, data.spfNames} {
 				spfName := i == 1
 				for _, name := range list {
-					spfNameID := tableMap.get("name", name)
-					stmtMap.exec("spfname", spfNameID, recordID, spfName)
+					spfNameID := tsm.get("name", name)
+					tsm.exec("spfname", spfNameID, recordID, spfName)
 				}
 			}
 		}
@@ -164,9 +164,9 @@ func dmarcRRWriter(db *sql.DB, seq iter.Seq[nameData]) {
 }
 
 // `insertF` for DMARC TXT
-func dmarcWrite(tableMap TableMap, stmtMap StmtMap, fdr fdResults) {
+func dmarcWrite(tsm *TableStmtMap, fdr fdResults) {
 	nameID := fdr.id // ID with no '_dmarc.'
-	defer stmtMap.exec("dmarc_tried", nameID)
+	defer tsm.exec("dmarc_tried", nameID)
 
 	var dmarcRecords []string
 
@@ -177,13 +177,13 @@ func dmarcWrite(tableMap TableMap, stmtMap StmtMap, fdr fdResults) {
 	}
 
 	for _, s := range dmarcRecords {
-		recordID := tableMap.get("dmarc_record", s)
-		stmtMap.exec("dmarc", nameID, recordID)
+		recordID := tsm.get("dmarc_record", s)
+		tsm.exec("dmarc", nameID, recordID)
 		if len(dmarcRecords) > 1 {
-			stmtMap.exec("dmarc_duplicate", nameID, recordID)
+			tsm.exec("dmarc_duplicate", nameID, recordID)
 		}
 		if _, err := parseDmarc(s); err != nil {
-			stmtMap.exec("dmarc_valid", false, err.Error(), recordID)
+			tsm.exec("dmarc_valid", false, err.Error(), recordID)
 		}
 	}
 }
@@ -203,17 +203,17 @@ func chaosTXTWriter(db *sql.DB, seq iter.Seq[fieldData]) {
 }
 
 // `insertF` for Chaosnet TXT
-func chaosTXTWrite(tableMap TableMap, stmtMap StmtMap, chr chaosResults) {
+func chaosTXTWrite(tsm *TableStmtMap, chr chaosResults) {
 	ipID := chr.id
-	defer stmtMap.exec("chaos_queried", ipID)
+	defer tsm.exec("chaos_queried", ipID)
 
 	for _, result := range chr.results {
-		queriedNameID := tableMap.get("name", result.queried.String())
-		resultNameID := tableMap.get("name", result.resultName.String())
-		responseID := tableMap.get("chaos_response_value", result.value)
+		queriedNameID := tsm.get("name", result.queried.String())
+		resultNameID := tsm.get("name", result.resultName.String())
+		responseID := tsm.get("chaos_response_value", result.value)
 
-		stmtMap.exec("chaos_query", queriedNameID, ipID)
-		stmtMap.exec("chaos_response", queriedNameID, ipID, responseID, resultNameID)
+		tsm.exec("chaos_query", queriedNameID, ipID)
+		tsm.exec("chaos_response", queriedNameID, ipID, responseID, resultNameID)
 	}
 }
 
@@ -222,35 +222,36 @@ func checkUpReader(db *sql.DB) iter.Seq[checkUpData] {
 	return func(yield func(checkUpData) bool) {
 		// each NS IP and one zone it is meant to serve
 		tx := check1(db.Begin())
+		defer tx.Commit()
 		var v4Filter string
 		if !v6 {
 			v4Filter = `AND ip.address LIKE '%.%'`
 		}
-		rows := check1(tx.Query(fmt.Sprintf(`
-		SELECT DISTINCT ip.address, zone.name, ip.id
-		FROM zone_ns
-		INNER JOIN name AS zone ON zone_ns.zone_id = zone.id
-		INNER JOIN name_ip ON name_ip.name_id = zone_ns.ns_id
-		INNER JOIN ip ON name_ip.ip_id = ip.id
-		WHERE ip.resp_checked=FALSE AND zone.is_zone=TRUE %s
-		GROUP BY ip.id
-	`, v4Filter)))
+		qs := fmt.Sprintf(`
+			SELECT DISTINCT ip.address, zone.name, ip.id
+			FROM zone_ns
+			INNER JOIN name AS zone ON zone_ns.zone_id = zone.id
+			INNER JOIN name_ip ON name_ip.name_id = zone_ns.ns_id
+			INNER JOIN ip ON name_ip.ip_id = ip.id
+			WHERE ip.resp_checked=FALSE AND zone.is_zone=TRUE %s
+			GROUP BY ip.id
+		`, v4Filter)
+		rows := check1(tx.Query(qs))
+		defer rows.Close()
 
 		for rows.Next() {
 			var ip, zone string
 			var ipID int64
 			check(rows.Scan(&ip, &zone, &ipID))
-			if !yield(checkUpData{
+			v := checkUpData{
 				ns:   net.JoinHostPort(ip, "53"),
 				zone: mustParseName(zone),
 				ipID: ipID,
-			}) {
-				break
+			}
+			if !yield(v) {
+				return
 			}
 		}
-
-		check(rows.Close())
-		check(tx.Commit())
 	}
 }
 
@@ -266,7 +267,9 @@ func zoneIPReader(db *sql.DB) iter.Seq[zoneIP] {
 	`
 
 		tx := check1(db.Begin())
+		defer tx.Commit()
 		rows := check1(tx.Query(qs))
+		defer rows.Close()
 
 		for rows.Next() {
 			var zip zoneIP
@@ -275,12 +278,9 @@ func zoneIPReader(db *sql.DB) iter.Seq[zoneIP] {
 			zip.zone.name = mustParseName(zoneName)
 			zip.ip.name = net.JoinHostPort(zip.ip.name, "53")
 			if !yield(zip) {
-				break
+				return
 			}
 		}
-
-		check(rows.Close())
-		check(tx.Commit())
 	}
 }
 
@@ -302,34 +302,34 @@ func parentNSWriter(db *sql.DB, seq iter.Seq[zoneIP]) {
 }
 
 // `insertF` for NS glue records from parent zone
-func parentNSWrite(tableMap TableMap, stmtMap StmtMap, nsr parentNSResults) {
+func parentNSWrite(tsm *TableStmtMap, nsr parentNSResults) {
 	zoneID := nsr.zone.id
 	ipID := nsr.ip.id
 
-	defer stmtMap.exec("fetched", zoneID, ipID)
+	defer tsm.exec("fetched", zoneID, ipID)
 
 	if len(nsr.ns) == 0 {
 		return
 	}
 
-	stmtMap.exec("registered", zoneID)
+	tsm.exec("registered", zoneID)
 
 	for _, a := range nsr.a {
-		nameID := tableMap.get("name", a.Hdr.Name.String())
-		ipID := tableMap.get("ip", a.A.String())
-		stmtMap.exec("insert_name_ip", nameID, ipID)
+		nameID := tsm.get("name", a.Hdr.Name.String())
+		ipID := tsm.get("ip", a.A.String())
+		tsm.exec("insert_name_ip", nameID, ipID)
 	}
 
 	for _, aaaa := range nsr.aaaa {
-		nameID := tableMap.get("name", aaaa.Hdr.Name.String())
-		ipID := tableMap.get("ip", aaaa.AAAA.String())
-		stmtMap.exec("insert_name_ip", nameID, ipID)
+		nameID := tsm.get("name", aaaa.Hdr.Name.String())
+		ipID := tsm.get("ip", aaaa.AAAA.String())
+		tsm.exec("insert_name_ip", nameID, ipID)
 	}
 
 	for _, ns := range nsr.ns {
-		nsID := tableMap.get("name", ns.Ns.String())
-		stmtMap.exec("name_to_ns", nsID)
-		stmtMap.exec("insert_zone_ns", zoneID, nsID)
+		nsID := tsm.get("name", ns.Ns.String())
+		tsm.exec("name_to_ns", nsID)
+		tsm.exec("insert_zone_ns", zoneID, nsID)
 	}
 }
 
@@ -352,26 +352,26 @@ func netNSWriter(db *sql.DB, seq iter.Seq[nameData]) {
 }
 
 // `insertF` for NS
-func nsWrite(tableMap TableMap, stmtMap StmtMap, nsd rrResults[dns.NS]) {
+func nsWrite(tsm *TableStmtMap, nsd rrResults[dns.NS]) {
 	zoneID := nsd.id
-	defer stmtMap.exec("update", zoneID)
+	defer tsm.exec("update", zoneID)
 
 	if len(nsd.results) == 0 {
 		return
 	}
 
-	stmtMap.exec("registered", zoneID)
-	rrTypeID := tableMap.get("rr_type", "NS")
-	rrNameID := tableMap.get("rr_name", nsd.name.String())
+	tsm.exec("registered", zoneID)
+	rrTypeID := tsm.get("rr_type", "NS")
+	rrNameID := tsm.get("rr_name", nsd.name.String())
 
 	for _, ns := range nsd.results {
 		dns.Canonicalize(&ns)
-		nsID := tableMap.get("name", ns.Ns.String())
+		nsID := tsm.get("name", ns.Ns.String())
 
-		stmtMap.exec("insert", zoneID, nsID)
+		tsm.exec("insert", zoneID, nsID)
 
-		rrValueID := tableMap.get("rr_value", ns.String())
-		stmtMap.exec("zone2rr", zoneID, rrTypeID, rrNameID, rrValueID)
+		rrValueID := tsm.get("rr_value", ns.String())
+		tsm.exec("zone2rr", zoneID, rrTypeID, rrNameID, rrValueID)
 	}
 }
 
@@ -394,37 +394,37 @@ func netIPWriter(db *sql.DB, seq iter.Seq[nameData]) {
 }
 
 // `insertF` for A/AAAA
-func ipWrite(tableMap TableMap, stmtMap StmtMap, ad addrData) {
+func ipWrite(tsm *TableStmtMap, ad addrData) {
 	nameID := ad.id
 	registered := ad.registered
-	defer stmtMap.exec("update", registered, nameID)
+	defer tsm.exec("update", registered, nameID)
 
 	if len(ad.cname) > 0 {
 		fmt.Printf("cname from address %s\n", ad.name)
 		finalRegistered, loop := cnameChainFinalEntry(ad.cname)
 
 		for _, entry := range ad.cname {
-			srcID := tableMap.get("name", entry.Hdr.Name.String())
-			targetID := tableMap.get("name", entry.Target.String())
+			srcID := tsm.get("name", entry.Hdr.Name.String())
+			targetID := tsm.get("name", entry.Target.String())
 			entryRegistered := registered || loop
 			if !entryRegistered {
 				entryRegistered = entry.Hdr.Name != finalRegistered
 			}
 
-			stmtMap.exec("cname_entry", entryRegistered, targetID, srcID)
+			tsm.exec("cname_entry", entryRegistered, targetID, srcID)
 		}
 	}
 
 	for _, a := range ad.a {
-		ipID := tableMap.get("ip", a.A.String())
+		ipID := tsm.get("ip", a.A.String())
 
-		stmtMap.exec("insert", nameID, ipID)
+		tsm.exec("insert", nameID, ipID)
 	}
 
 	for _, aaaa := range ad.aaaa {
-		ipID := tableMap.get("ip", aaaa.AAAA.String())
+		ipID := tsm.get("ip", aaaa.AAAA.String())
 
-		stmtMap.exec("insert", nameID, ipID)
+		tsm.exec("insert", nameID, ipID)
 	}
 }
 
@@ -893,7 +893,7 @@ func addrResolverWorker(dataChan <-chan retryWrap[nameData, addrData], refeedCha
 }
 
 // `resolverWorker` wrapper to query for zone parents
-func parentCheckWorker(dataChan <-chan retryWrap[childParent, empty], refeedChan chan<- retryWrap[childParent, empty], outChan chan<- childParent, retryWg *sync.WaitGroup, tableMap TableMap, _ StmtMap) {
+func parentCheckWorker(dataChan <-chan retryWrap[childParent, empty], refeedChan chan<- retryWrap[childParent, empty], outChan chan<- childParent, retryWg *sync.WaitGroup, tsm *TableStmtMap) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,

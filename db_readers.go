@@ -11,18 +11,17 @@ import (
 func getDbFieldData(qs string, db *sql.DB) iter.Seq[fieldData] {
 	return func(yield func(fieldData) bool) {
 		tx := check1(db.Begin())
+		defer tx.Commit()
 		rows := check1(tx.Query(qs))
+		defer rows.Close()
 
 		for rows.Next() {
 			var fd fieldData
 			check(rows.Scan(&fd.name, &fd.id))
 			if !yield(fd) {
-				break
+				return
 			}
 		}
-
-		check(rows.Close())
-		check(tx.Commit())
 	}
 }
 
@@ -92,7 +91,9 @@ func zoneNsIpReader(db *sql.DB) iter.Seq[zoneIP] {
 	`
 
 		tx := check1(db.Begin())
+		defer tx.Commit()
 		rows := check1(tx.Query(qs))
+		defer rows.Close()
 
 		for rows.Next() {
 			var zip zoneIP
@@ -100,12 +101,9 @@ func zoneNsIpReader(db *sql.DB) iter.Seq[zoneIP] {
 			check(rows.Scan(&zoneName, &zip.ip.name, &zip.zone.id, &zip.ip.id))
 			zip.zone.name = mustParseName(zoneName)
 			if !yield(zip) {
-				break
+				return
 			}
 		}
-
-		check(rows.Close())
-		check(tx.Commit())
 	}
 }
 
@@ -123,7 +121,9 @@ func zoneNsIpParentReader(db *sql.DB) iter.Seq[zoneIP] {
 	`
 
 		tx := check1(db.Begin())
+		defer tx.Commit()
 		rows := check1(tx.Query(qs))
+		defer rows.Close()
 
 		for rows.Next() {
 			var zip zoneIP
@@ -131,12 +131,9 @@ func zoneNsIpParentReader(db *sql.DB) iter.Seq[zoneIP] {
 			check(rows.Scan(&zoneName, &zip.ip.name, &zip.zone.id, &zip.ip.id))
 			zip.zone.name = mustParseName(zoneName)
 			if !yield(zip) {
-				break
+				return
 			}
 		}
-
-		check(rows.Close())
-		check(tx.Commit())
 	}
 }
 
@@ -152,7 +149,9 @@ func parentNSReader(db *sql.DB) iter.Seq[zoneIP] {
 	`
 
 		tx := check1(db.Begin())
+		defer tx.Commit()
 		rows := check1(tx.Query(qs))
+		defer rows.Close()
 
 		for rows.Next() {
 			var zip zoneIP
@@ -160,11 +159,8 @@ func parentNSReader(db *sql.DB) iter.Seq[zoneIP] {
 			check(rows.Scan(&zoneName, &zip.ip.name, &zip.zone.id, &zip.ip.id))
 			zip.zone.name = mustParseName(zoneName)
 			if !yield(zip) {
-				break
+				return
 			}
 		}
-
-		check(rows.Close())
-		check(tx.Commit())
 	}
 }

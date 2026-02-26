@@ -70,8 +70,8 @@ func detectUnregisteredDomains(db *sql.DB, seq iter.Seq[nameData]) {
 	netWriter(db, seq, tablesFields, namesStmts, regMapper, unregisteredWrite)
 }
 
-func unregisteredWrite(_ TableMap, stmtMap StmtMap, reg regStatus) {
-	stmtMap.exec("update", reg.registered, reg.id)
+func unregisteredWrite(tsm *TableStmtMap, reg regStatus) {
+	tsm.exec("update", reg.registered, reg.id)
 }
 
 func getUnregisteredDomains(db *sql.DB) {

@@ -255,7 +255,7 @@ func nsecWalkResWriter(db *sql.DB, seq iter.Seq[rrDBData]) {
 	netWriter(db, seq, tablesFields, namesStmts, nsecWalkResultResolver, nsecWalkResWrite)
 }
 
-func nsecWalkResWrite(tableMap TableMap, stmtMap StmtMap, res nsecWalkResolveRes) {
+func nsecWalkResWrite(tsm *TableStmtMap, res nsecWalkResolveRes) {
 	var rrTypeID, rrNameID int64
 	defaultRRTypeID := res.rrType.id
 	defaultRRNameID := res.rrName.id
@@ -264,31 +264,31 @@ func nsecWalkResWrite(tableMap TableMap, stmtMap StmtMap, res nsecWalkResolveRes
 		if rr.rrType == res.rrType.name {
 			rrTypeID = defaultRRTypeID
 		} else {
-			rrTypeID = tableMap.get("rr_type", rr.rrType)
+			rrTypeID = tsm.get("rr_type", rr.rrType)
 		}
 
 		if rr.rrName == res.rrName.name {
 			rrNameID = defaultRRNameID
 		} else {
-			rrNameID = tableMap.get("rr_name", rr.rrName.String())
+			rrNameID = tsm.get("rr_name", rr.rrName.String())
 		}
 
-		rrValueID := tableMap.get("rr_value", rr.rrValue)
+		rrValueID := tsm.get("rr_value", rr.rrValue)
 		zoneID := res.rrValue.id
 
-		stmtMap.exec("insert", zoneID, rrTypeID, rrNameID, rrValueID)
+		tsm.exec("insert", zoneID, rrTypeID, rrNameID, rrValueID)
 	}
 
-	stmtMap.exec("queried", res.id)
+	tsm.exec("queried", res.id)
 }
 
-func nsecWalkInsert(tableMap TableMap, stmtMap StmtMap, zw *walkZone) {
+func nsecWalkInsert(tsm *TableStmtMap, zw *walkZone) {
 	zoneID := zw.id
 
 	addSubdomain := func(subdomain dns.Name) {
-		childZoneID := tableMap.get("name", subdomain.String())
-		stmtMap.exec("name_to_zone", childZoneID)
-		stmtMap.exec("subdomain", zoneID, childZoneID)
+		childZoneID := tsm.get("name", subdomain.String())
+		tsm.exec("name_to_zone", childZoneID)
+		tsm.exec("subdomain", zoneID, childZoneID)
 	}
 
 rrLoop:
@@ -305,7 +305,7 @@ rrLoop:
 
 		rrT := rr.(*dns.NSEC)
 		rrName := rrT.Hdr.Name
-		rrNameID := tableMap.get("rr_name", rrName.String())
+		rrNameID := tsm.get("rr_name", rrName.String())
 
 	rrtLoop:
 		for rrType := range rrT.TypeBitMap.Iter {
@@ -318,13 +318,13 @@ rrLoop:
 				addSubdomain(rrName)
 			}
 
-			rrTypeID := tableMap.get("rr_type", rrType.String())
+			rrTypeID := tsm.get("rr_type", rrType.String())
 
-			stmtMap.exec("walk_res", zoneID, rrNameID, rrTypeID)
+			tsm.exec("walk_res", zoneID, rrNameID, rrTypeID)
 		}
 	}
 
-	stmtMap.exec("set_walked", zoneID)
+	tsm.exec("set_walked", zoneID)
 }
 
 func nsecWalk(db *sql.DB) {
@@ -449,7 +449,7 @@ func getMiddle(zone dns.Name, rn rangeset.RangeEntry[dns.Name]) iter.Seq[dns.Nam
 				continue
 			}
 			if !yield(res) {
-				break
+				return
 			}
 		}
 	}

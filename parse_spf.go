@@ -72,16 +72,20 @@ const (
 	ipv4Cidr = `/(?:3[0-2]|[12]?[0-9])`
 	ipv6Cidr = `/(?:12[0-8]|(?:1[01]|[1-9])?[0-9])`
 	dualCidr = `(?P<v4cidr>` + ipv4Cidr + `)?(?:/(?P<v6cidr>` + ipv6Cidr + `))?`
+
+	patSpfName      = `(?i)[a-z][a-z0-9_.-]*`
+	patSpfRecord    = `v=spf1(?P<terms>(?: +[^ ]+)+)? *`
+	patspfDirective = `(?P<qualifier>[+?~-]?)(?P<mechanism>(?i)i(?:nclude|p[46])|a(?:ll)?|exists|ptr|mx)(?P<remainder>.*)`
 )
 
 var (
-	patternName        = compileExactMatch(`(?i)[a-z][a-z0-9_.-]*`)
+	patternName        = compileExactMatch(patSpfName)
 	patternMacroString = compileExactMatch(macroString)
 	patternIPv4CIDR    = compileExactMatch(ipv4Cidr)
 	patternIPv6CIDR    = compileExactMatch(ipv6Cidr)
 	patternDualCidr    = compileExactMatch(dualCidr)
-	patternRecord      = compileExactMatch(`v=spf1(?P<terms>(?: +[^ ]+)+)? *`)
-	patternDirective   = compileExactMatch(`(?P<qualifier>[+?~-]?)(?P<mechanism>(?i)i(?:nclude|p[46])|a(?:ll)?|exists|ptr|mx)(?P<remainder>.*)`)
+	patternRecord      = compileExactMatch(patSpfRecord)
+	patternDirective   = compileExactMatch(patspfDirective)
 	patternDomainSpec  = compileExactMatch(macroString + domainEnd)
 )
 
@@ -186,7 +190,7 @@ func macroToConstantDomain(macro string) (constant string, ok bool) {
 }
 
 func (spf *spfData) parseTerms(txt []byte) (err error) {
-	for _, field := range bytes.Fields(txt) {
+	for field := range bytes.FieldsSeq(txt) {
 		var parsed bool
 		if parsed, err = spf.tryParseDirective(field); err != nil {
 			return err

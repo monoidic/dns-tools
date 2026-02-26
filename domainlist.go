@@ -37,10 +37,10 @@ func insertDomainWorker(db *sql.DB, seq iter.Seq[dns.Name]) {
 	insertRR(db, seq, tablesFields, namesStmts, domainInsert)
 }
 
-func domainInsert(tableMap TableMap, stmtMap StmtMap, domain dns.Name) {
-	nameID := tableMap.get("name", domain.String())
+func domainInsert(tsm *TableStmtMap, domain dns.Name) {
+	nameID := tsm.get("name", domain.String())
 
-	stmtMap.exec("maybe_zone", nameID)
+	tsm.exec("maybe_zone", nameID)
 }
 
 func parseDomainLists(db *sql.DB) {

@@ -67,8 +67,8 @@ func addChildParent(seq iter.Seq[nameData]) iter.Seq[childParent] {
 	}
 }
 
-func parentCheckWriter(tableMap TableMap, stmtMap StmtMap, res childParent) {
-	defer stmtMap.exec("mapped", res.child.id)
+func parentCheckWriter(tsm *TableStmtMap, res childParent) {
+	defer tsm.exec("mapped", res.child.id)
 	if !(res.resolved && res.parentGuess.EncodedLen() != 0) {
 		return
 	}
@@ -79,9 +79,9 @@ func parentCheckWriter(tableMap TableMap, stmtMap StmtMap, res childParent) {
 		if res.registered {
 			name = res.parent.name
 		}
-		parentID = tableMap.get("name", name.String())
+		parentID = tsm.get("name", name.String())
 	}
 
-	stmtMap.exec("set_zone", parentID)
-	stmtMap.exec("name_parent", parentID, res.child.id)
+	tsm.exec("set_zone", parentID)
+	tsm.exec("name_parent", parentID, res.child.id)
 }

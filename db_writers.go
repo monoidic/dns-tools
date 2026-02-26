@@ -27,39 +27,39 @@ func insertRRWorker(db *sql.DB, seq iter.Seq[rrData]) {
 	insertRR(db, seq, tablesFields, namesStmts, insertRRW)
 }
 
-func insertRRW(tableMap TableMap, stmtMap StmtMap, rrD rrData) {
+func insertRRW(tsm *TableStmtMap, rrD rrData) {
 	switch rrD.msgtype {
 	case rrDataRegular:
-		zoneID := tableMap.get("name", rrD.zone.String())
-		rrTypeID := tableMap.get("rr_type", rrD.rrType)
-		rrNameID := tableMap.get("rr_name", rrD.rrName.String())
-		rrValueID := tableMap.get("rr_value", rrD.rrValue)
+		zoneID := tsm.get("name", rrD.zone.String())
+		rrTypeID := tsm.get("rr_type", rrD.rrType)
+		rrNameID := tsm.get("rr_name", rrD.rrName.String())
+		rrValueID := tsm.get("rr_value", rrD.rrValue)
 
 		poison := !dns.IsSubDomain(rrD.zone, rrD.rrName)
 
-		stmtMap.exec("insert", zoneID, rrTypeID, rrNameID, rrValueID, poison)
+		tsm.exec("insert", zoneID, rrTypeID, rrNameID, rrValueID, poison)
 
 		if rrD.selfZone || rrD.parentZone {
-			stmtMap.exec("self_parent_zone", rrD.selfZone, rrD.parentZone, zoneID, rrTypeID, rrNameID, rrValueID)
+			tsm.exec("self_parent_zone", rrD.selfZone, rrD.parentZone, zoneID, rrTypeID, rrNameID, rrValueID)
 		}
 
 	case rrDataZoneDone:
-		zoneID := tableMap.get("name", rrD.zone.String())
+		zoneID := tsm.get("name", rrD.zone.String())
 
-		stmtMap.exec("update", zoneID)
+		tsm.exec("update", zoneID)
 
 	case rrDataZoneAxfrEnd:
-		ipID := tableMap.get("ip", rrD.ip)
-		zoneID := tableMap.get("name", rrD.zone.String())
+		ipID := tsm.get("ip", rrD.ip)
+		zoneID := tsm.get("name", rrD.zone.String())
 
-		stmtMap.exec("vuln_ns", ipID, zoneID)
-		stmtMap.exec("update", zoneID)
+		tsm.exec("vuln_ns", ipID, zoneID)
+		tsm.exec("update", zoneID)
 
 	case rrDataZoneAxfrTry:
-		ipID := tableMap.get("ip", rrD.ip)
-		zoneID := tableMap.get("name", rrD.zone.String())
+		ipID := tsm.get("ip", rrD.ip)
+		zoneID := tsm.get("name", rrD.zone.String())
 
-		stmtMap.exec("axfr_tried", ipID, zoneID)
+		tsm.exec("axfr_tried", ipID, zoneID)
 	}
 }
 
@@ -79,27 +79,27 @@ func insertNSRR(db *sql.DB, seq iter.Seq[rrDBData]) {
 	insertRR(db, seq, tablesFields, namesStmts, nsRRF)
 }
 
-func nsRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
+func nsRRF(tsm *TableStmtMap, ad rrDBData) {
 	rr := check1(dns.NewRR(ad.rrValue.name))
 	nsRR := rr.(*dns.NS)
 
-	zoneID := tableMap.get("name", ad.rrName.name.String())
-	nsID := tableMap.get("name", nsRR.Ns.String())
+	zoneID := tsm.get("name", ad.rrName.name.String())
+	nsID := tsm.get("name", nsRR.Ns.String())
 
-	stmtMap.exec("set_zone", zoneID)
-	stmtMap.exec("set_ns", nsID)
-	stmtMap.exec("insert", zoneID, nsID)
+	tsm.exec("set_zone", zoneID)
+	tsm.exec("set_ns", nsID)
+	tsm.exec("insert", zoneID, nsID)
 
 	if ad.fromParent || ad.fromSelf {
-		stmtMap.exec("set_parent_self", ad.fromParent, ad.fromSelf, zoneID, nsID)
+		tsm.exec("set_parent_self", ad.fromParent, ad.fromSelf, zoneID, nsID)
 
 		if ad.fromParent {
-			parentID := tableMap.get("name", nsRR.Hdr.Name.String())
-			stmtMap.exec("set_checked", parentID)
+			parentID := tsm.get("name", nsRR.Hdr.Name.String())
+			tsm.exec("set_checked", parentID)
 		}
 	}
 
-	stmtMap.exec("parsed", ad.id)
+	tsm.exec("parsed", ad.id)
 }
 
 func insertIPRR(db *sql.DB, seq iter.Seq[rrDBData]) {
@@ -116,7 +116,7 @@ func insertIPRR(db *sql.DB, seq iter.Seq[rrDBData]) {
 	insertRR(db, seq, tablesFields, namesStmts, ipRRF)
 }
 
-func ipRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
+func ipRRF(tsm *TableStmtMap, ad rrDBData) {
 	rr := check1(dns.NewRR(ad.rrValue.name))
 
 	var ip string
@@ -129,16 +129,16 @@ func ipRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
 		panic(fmt.Sprintf("invalid IP type: %T\n", rr))
 	}
 
-	nameID := tableMap.get("name", ad.rrName.name.String())
-	ipID := tableMap.get("ip", ip)
+	nameID := tsm.get("name", ad.rrName.name.String())
+	ipID := tsm.get("ip", ip)
 
-	stmtMap.exec("name_ip", nameID, ipID)
+	tsm.exec("name_ip", nameID, ipID)
 
 	if ad.fromParent || ad.fromSelf {
-		stmtMap.exec("parent_self_zone", ad.fromParent, ad.fromSelf, nameID, ipID)
+		tsm.exec("parent_self_zone", ad.fromParent, ad.fromSelf, nameID, ipID)
 	}
 
-	stmtMap.exec("parsed", ad.id)
+	tsm.exec("parsed", ad.id)
 }
 
 func insertMXRR(db *sql.DB, seq iter.Seq[rrDBData]) {
@@ -154,18 +154,18 @@ func insertMXRR(db *sql.DB, seq iter.Seq[rrDBData]) {
 	insertRR(db, seq, tablesFields, namesStmts, mxRRF)
 }
 
-func mxRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
+func mxRRF(tsm *TableStmtMap, ad rrDBData) {
 	rr := check1(dns.NewRR(ad.rrValue.name))
-	defer stmtMap.exec("parsed", ad.id)
+	defer tsm.exec("parsed", ad.id)
 
 	mxRR := rr.(*dns.MX)
 	dns.Canonicalize(mxRR)
 
-	nameID := tableMap.get("name", ad.rrName.name.String())
-	mxID := tableMap.get("name", mxRR.Mx.String())
+	nameID := tsm.get("name", ad.rrName.name.String())
+	mxID := tsm.get("name", mxRR.Mx.String())
 
-	stmtMap.exec("set_mx", mxID)
-	stmtMap.exec("name_mx", nameID, mxID, mxRR.Preference)
+	tsm.exec("set_mx", mxID)
+	tsm.exec("name_mx", nameID, mxID, mxRR.Preference)
 }
 
 func insertPTRRR(db *sql.DB, seq iter.Seq[rrDBData]) {
@@ -183,22 +183,22 @@ func insertPTRRR(db *sql.DB, seq iter.Seq[rrDBData]) {
 	insertRR(db, seq, tablesFields, namesStmts, ptrRRF)
 }
 
-func ptrRRF(tableMap TableMap, stmtMap StmtMap, ad rrDBData) {
+func ptrRRF(tsm *TableStmtMap, ad rrDBData) {
 	if ip, err := ptrToIP(ad.rrName.name); err != nil {
 		rr := check1(dns.NewRR(ad.rrValue.name))
 		ptrRR := rr.(*dns.PTR)
 		dns.Canonicalize(ptrRR)
 
 		ipString := ip.String()
-		ipID := tableMap.get("ip", ipString)
-		ptrID := tableMap.get("name", ptrRR.Ptr.String())
+		ipID := tsm.get("ip", ipString)
+		ptrID := tsm.get("name", ptrRR.Ptr.String())
 
-		stmtMap.exec("rdns", ipID, ptrID)
-		stmtMap.exec("name_to_rdns", ptrID)
-		stmtMap.exec("mapped", ipID)
+		tsm.exec("rdns", ipID, ptrID)
+		tsm.exec("name_to_rdns", ptrID)
+		tsm.exec("mapped", ipID)
 	}
 
-	stmtMap.exec("parsed", ad.id)
+	tsm.exec("parsed", ad.id)
 }
 
 func insertZoneNsIp(db *sql.DB, seq iter.Seq[zoneIP]) {
@@ -217,6 +217,6 @@ func insertZoneNsIpGlue(db *sql.DB, seq iter.Seq[zoneIP]) {
 	insertRR(db, seq, tablesFields, namesStmts, zoneNsIpRRF)
 }
 
-func zoneNsIpRRF(_tableMap TableMap, stmtMap StmtMap, zip zoneIP) {
-	stmtMap.exec("zone_ns_ip", zip.zone.id, zip.ip.id)
+func zoneNsIpRRF(tsm *TableStmtMap, zip zoneIP) {
+	tsm.exec("zone_ns_ip", zip.zone.id, zip.ip.id)
 }
