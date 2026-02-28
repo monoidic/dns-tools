@@ -249,24 +249,25 @@ func (wz *nsec3WalkZone) addKnown(rr *dns.NSEC3, rn rangeset.RangeEntry[Nsec3Has
 
 // assumes sha1 cuz protocol ossification lole
 // label is a nsec-formatted label, e.g "\x04abcd", zone is the rest, e.g "\x07example\x03com\x00", salt is decoded salt
+// buf is 20-byte (160-bit) buffer where the hash is stored
 // tries to be efficient
-func nsec3Hash(label, zone, salt []byte, iterations int) Nsec3Hash {
+func nsec3Hash(label, zone, salt, buf []byte, iterations int) Nsec3Hash {
 	h := sha1.New()
 
 	h.Write(label)
 	h.Write(zone)
 	h.Write(salt)
-	hashB := h.Sum(nil)
+	buf = h.Sum(buf[:0])
 
 	for range iterations {
 		h.Reset()
-		h.Write(hashB)
+		h.Write(buf)
 		h.Write(salt)
-		hashB = h.Sum(hashB[:0])
+		buf = h.Sum(buf[:0])
 	}
 
 	var ret Nsec3Hash
-	copy(ret.H[:], hashB)
+	copy(ret.H[:], buf)
 	return ret
 }
 
@@ -345,8 +346,10 @@ func randomLabels(yield func([]byte) bool) {
 
 func genHashes(zone, salt []byte, iterations int) iter.Seq[hashEntry] {
 	return func(yield func(hashEntry) bool) {
+		var buf [20]byte
+		bufSl := buf[:]
 		for label := range randomLabels {
-			hash := nsec3Hash(label, zone, salt, iterations)
+			hash := nsec3Hash(label, zone, salt, bufSl, iterations)
 			if !yield(hashEntry{
 				hash:  hash,
 				label: slices.Clone(label[1:]),
@@ -501,12 +504,32 @@ func nsec3WalkWorker(zoneChan <-chan retryWrap[nameData, empty], refeedChan chan
 	resolverWorker(zoneChan, refeedChan, dataOutChan, &dns.Msg{}, nsec3WalkResolve, retryWg)
 }
 
+func printHashcat(start Nsec3Hash, rr *dns.NSEC3, zone string) {
+	startS := start.String()
+	var types []string
+	for t := range rr.TypeBitMap.Iter {
+		switch t {
+		case dns.TypeNSEC3, dns.TypeRRSIG: // skip
+		default:
+			types = append(types, t.String())
+		}
+	}
+
+	fmt.Printf("%s:%s:%s:%d\n%s: %s\n", strings.ToLower(startS), zone, rr.Salt.Hex(), rr.Iterations, startS, strings.Join(types, " "))
+	// vobfmi4g4v6metcfmmcpti7amjamke0t:.zone.ee::0
+	// hash:zone:salt:iterations
+
+	// VOBFMI4G4V6METCFMMCPTI7AMJAMKE0T: A CAA DNSKEY MX NS NSEC3PARAM SOA TXT
+	// hash: *(rrtype)
+}
+
 func nsec3WalkInsert(tsm *TableStmtMap, zw *nsec3WalkZone) {
 	zoneID := zw.id
+	// zone := zw.zone.String()
 
 	buf := make([]byte, 32)
 
-	hexSalt := string(hex.AppendEncode(nil, zw.salt))
+	hexSalt := hex.EncodeToString(zw.salt)
 
 	tsm.exec("nsec3_params", zoneID, hexSalt, zw.iterations)
 
@@ -526,6 +549,8 @@ func nsec3WalkInsert(tsm *TableStmtMap, zw *nsec3WalkZone) {
 			rrTypeID := tsm.get("rr_type", t.String())
 			tsm.exec("hash_rrtype", zoneID, hash, rrTypeID)
 		}
+
+		// printHashcat(start, rr, zone)
 	}
 
 	if zw.err != nil {
