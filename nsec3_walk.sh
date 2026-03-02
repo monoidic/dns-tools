@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-db=$(mktemp --tmpdir nsec3_walk.XXXXXX.sqlite3)
+db=$(mktemp ./nsec3_walk.XXXXXX.sqlite3)
 
 source lib.sh
 
@@ -35,12 +35,25 @@ hashcat_format() {
 }
 
 rr_info() {
-	sqlite3 "$db" 'SELECT nsec3_hash FROM nsec3_hashes ORDER BY nsec3_hash' | while read nsec3_hash; do
-		printf '%s: ' "$nsec3_hash"
-		sqlite3 "$db" "SELECT rr_type.name FROM nsec3_hash_rr_map INNER JOIN nsec3_hashes ON nsec3_hash_rr_map.nsec3_hash_id=nsec3_hashes.id INNER JOIN rr_type ON nsec3_hash_rr_map.rr_type_id=rr_type.id WHERE nsec3_hashes.nsec3_hash='${nsec3_hash}' ORDER BY rr_type.name" | tr '\n' ' '
-		echo
-	done
+    chunk_hash=''
+    chunk_rrs=''
+	while read s; do
+		this_hash=$(echo "$s" | cut -d'|' -f1)
+		this_rrs=$(echo "$s" | cut -d'|' -f2)
 
+		if [[ $chunk_hash != $this_hash ]]; then
+            if [[ $chunk_hash != '' ]]; then
+                printf '%s:%s\n' "$chunk_hash" "$chunk_rrs"
+            fi
+            chunk_hash="$this_hash"
+            chunk_rrs=''
+        fi
+		chunk_rrs="${chunk_rrs} ${this_rrs}"
+	done <<< $(sqlite3 "$db" 'SELECT nsec3_hashes.nsec3_hash, rr_type.name FROM nsec3_hash_rr_map INNER JOIN nsec3_hashes ON nsec3_hash_rr_map.nsec3_hash_id=nsec3_hashes.id INNER JOIN rr_type ON nsec3_hash_rr_map.rr_type_id=rr_type.id ORDER BY nsec3_hashes.nsec3_hash, rr_type.name')
+	#    ^ https://stackoverflow.com/questions/16854280/a-variable-modified-inside-a-while-loop-is-not-remembered
+
+	# final chunk
+	printf '%s:%s\n' "$chunk_hash" "$chunk_rrs"
 }
 
 main $*

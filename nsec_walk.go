@@ -22,11 +22,10 @@ type walkZone struct {
 	sem        *semaphore.Weighted
 	wg         *sync.WaitGroup
 	pool       *sync.Pool
-	mux        *sync.Mutex
 }
 
-func addKnown(rr dns.RR, zone dns.Name, rs *rangeset.RangeSet[dns.Name], rn rangeset.RangeEntry[dns.Name], rrTypesCh chan<- dns.RR) bool {
-	if !dns.IsSubDomain(zone, rn.Start) {
+func (wz *walkZone) addKnown(rr dns.RR, rs *rangeset.RangeSet[dns.Name], rn rangeset.RangeEntry[dns.Name]) bool {
+	if !dns.IsSubDomain(wz.zone, rn.Start) {
 		return false
 	}
 
@@ -40,13 +39,14 @@ func addKnown(rr dns.RR, zone dns.Name, rs *rangeset.RangeSet[dns.Name], rn rang
 
 	rs.Add(rn)
 	rs.Mux.Unlock()
-	rrTypesCh <- rr
+	wz.rrTypeChan <- rr
 
 	return true
 }
 
-func unknownRanges(zone dns.Name, rs *rangeset.RangeSet[dns.Name]) iter.Seq[rangeset.RangeEntry[dns.Name]] {
+func (wz *walkZone) unknownRanges(rs *rangeset.RangeSet[dns.Name]) iter.Seq[rangeset.RangeEntry[dns.Name]] {
 	return func(yield func(rangeset.RangeEntry[dns.Name]) bool) {
+		zone := wz.zone
 		rs.Mux.RLock()
 		defer rs.Mux.RUnlock()
 
@@ -101,11 +101,11 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[dns.Name]) {
 		}
 	}
 
-	unknowns := slices.Collect(unknownRanges(zone, &knownRanges))
+	unknowns := slices.Collect(wz.unknownRanges(&knownRanges))
 
 	for _, rn := range unknowns {
 		for middle := range getMiddle(zone, rn) {
-			_ = wz.sem.Acquire(context.Background(), 1)
+			check(wz.sem.Acquire(context.Background(), 1))
 			connCache := wz.pool.Get().(*connCache)
 			msg := nsecWalkerResolve(middle, connCache)
 			wz.pool.Put(connCache)
@@ -144,7 +144,7 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[dns.Name]) {
 				switch rrT := rr.(type) {
 				case *dns.NSEC:
 					dns.Canonicalize(rrT)
-					if addKnown(rr, zone, &knownRanges, rangeset.RangeEntry[dns.Name]{Start: rrT.Hdr.Name, End: rrT.NextDomain}, wz.rrTypeChan) {
+					if wz.addKnown(rr, &knownRanges, rangeset.RangeEntry[dns.Name]{Start: rrT.Hdr.Name, End: rrT.NextDomain}) {
 						// fmt.Printf("added entry %v\n", rrT)
 						expanded = true
 					}
@@ -158,13 +158,7 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[dns.Name]) {
 		}
 	}
 
-	for rn := range unknownRanges(zone, &knownRanges) {
-		if slices.Contains(unknowns, rn) {
-			// contained in original set of ranges; ignore
-			fmt.Printf("skipped range: %s\n", rn)
-			continue
-		}
-
+	for rn := range wz.unknownRanges(&knownRanges) {
 		wz.wg.Go(func() { nsecWalkResolveWorker(wz, rn) })
 	}
 }
@@ -177,7 +171,6 @@ func nsecWalkResolve(_ *connCache, _ *dns.Msg, zd *retryWrap[nameData, empty]) (
 		sem:        semaphore.NewWeighted(1000),
 		wg:         &sync.WaitGroup{},
 		pool:       &sync.Pool{},
-		mux:        &sync.Mutex{},
 	}
 
 	zone := zd.val.name
