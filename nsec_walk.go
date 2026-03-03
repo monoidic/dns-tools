@@ -16,12 +16,14 @@ import (
 )
 
 type walkZone struct {
-	zone       dns.Name
-	id         int64
-	rrTypeChan chan dns.RR
-	sem        *semaphore.Weighted
-	wg         *sync.WaitGroup
-	pool       *sync.Pool
+	zone        dns.Name
+	id          int64
+	rrTypeChan  chan dns.RR
+	sem         *semaphore.Weighted
+	wg          *sync.WaitGroup
+	pool        *sync.Pool
+	mux         *sync.Mutex
+	seenCounter map[rangeset.RangeEntry[dns.Name]]int
 }
 
 func (wz *walkZone) addKnown(rr dns.RR, rs *rangeset.RangeSet[dns.Name], rn rangeset.RangeEntry[dns.Name]) bool {
@@ -158,19 +160,42 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[dns.Name]) {
 		}
 	}
 
+	var thisDuped bool
+
 	for rn := range wz.unknownRanges(&knownRanges) {
+		if rn == thisRn {
+			thisDuped = true
+			wz.mux.Lock()
+			wz.seenCounter[thisRn]++
+			doSkip := wz.seenCounter[thisRn] >= retries
+			if doSkip {
+				delete(wz.seenCounter, thisRn)
+				wz.mux.Unlock()
+				fmt.Printf("skipped range: %s\n", rn)
+				continue
+			}
+			wz.mux.Unlock()
+		}
 		wz.wg.Go(func() { nsecWalkResolveWorker(wz, rn) })
+	}
+
+	if !thisDuped {
+		wz.mux.Lock()
+		delete(wz.seenCounter, thisRn)
+		wz.mux.Unlock()
 	}
 }
 
 func nsecWalkResolve(_ *connCache, _ *dns.Msg, zd *retryWrap[nameData, empty]) (*walkZone, error) {
 	wz := &walkZone{
-		zone:       zd.val.name,
-		id:         zd.val.id,
-		rrTypeChan: make(chan dns.RR, MIDBUFLEN),
-		sem:        semaphore.NewWeighted(1000),
-		wg:         &sync.WaitGroup{},
-		pool:       &sync.Pool{},
+		zone:        zd.val.name,
+		id:          zd.val.id,
+		rrTypeChan:  make(chan dns.RR, MIDBUFLEN),
+		sem:         semaphore.NewWeighted(1000),
+		wg:          &sync.WaitGroup{},
+		pool:        &sync.Pool{},
+		seenCounter: make(map[rangeset.RangeEntry[dns.Name]]int),
+		mux:         &sync.Mutex{},
 	}
 
 	zone := zd.val.name
@@ -203,11 +228,9 @@ func nsecWalkerResolve(name dns.Name, connCache *connCache) *dns.Msg {
 	msgSetSize(&msg)
 	msg.Extra[0].(*dns.OPT).SetDo()
 
-	for range retries {
-		res, err := plainResolveRandom(&msg, connCache)
-		if err == nil {
-			return res
-		}
+	res, err := plainResolveRandom(&msg, connCache)
+	if err == nil {
+		return res
 	}
 
 	return nil
