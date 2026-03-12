@@ -52,7 +52,7 @@ func (wz *walkZone) unknownRanges(rs *rangeset.RangeSet[dns.Name]) iter.Seq[rang
 		rs.Mux.RLock()
 		defer rs.Mux.RUnlock()
 
-		l := len(rs.Ranges)
+		l := rs.Ranges.Len()
 
 		if l == 0 {
 			// no known results, just give the whole zone
@@ -60,7 +60,8 @@ func (wz *walkZone) unknownRanges(rs *rangeset.RangeSet[dns.Name]) iter.Seq[rang
 			return
 		}
 
-		firstName := rs.Ranges[0].Start
+		firstRn, _ := rs.Ranges.GetAt(0)
+		firstName := firstRn.Start
 		if firstName != zone {
 			// unknown range before first known range
 			if !yield(rangeset.RangeEntry[dns.Name]{Start: zone, End: firstName}) {
@@ -68,11 +69,13 @@ func (wz *walkZone) unknownRanges(rs *rangeset.RangeSet[dns.Name]) iter.Seq[rang
 			}
 		}
 
-		last := rs.Ranges[0].End
+		last := firstRn.End
 		for i := range l - 1 {
-			start := rs.Ranges[i].End
-			end := rs.Ranges[i+1].Start
-			last = rs.Ranges[i+1].End
+			vi, _ := rs.Ranges.GetAt(i)
+			vii, _ := rs.Ranges.GetAt(i + 1)
+			start := vi.End
+			end := vii.Start
+			last = vii.End
 
 			if !yield(rangeset.RangeEntry[dns.Name]{Start: start, End: end}) {
 				return
@@ -94,16 +97,16 @@ func nsecWalkWorker(zoneChan <-chan retryWrap[nameData, empty], refeedChan chan<
 func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[dns.Name]) {
 	zone := wz.zone
 
-	knownRanges := rangeset.RangeSet[dns.Name]{Compare: dns.Compare, HasRWrap: true, RWrapV: zone}
+	knownRanges := rangeset.NewRangeset(dns.Compare, zone, true)
 
 	full := rangeset.RangeEntry[dns.Name]{Start: zone, End: zone}
 	for _, rn := range []rangeset.RangeEntry[dns.Name]{{Start: zone, End: thisRn.Start}, {Start: thisRn.End, End: zone}} {
 		if rn != full {
-			knownRanges.ProtectedAdd(rn)
+			knownRanges.Add(rn)
 		}
 	}
 
-	unknowns := slices.Collect(wz.unknownRanges(&knownRanges))
+	unknowns := slices.Collect(wz.unknownRanges(knownRanges))
 
 	for _, rn := range unknowns {
 		for middle := range getMiddle(zone, rn) {
@@ -146,7 +149,7 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[dns.Name]) {
 				switch rrT := rr.(type) {
 				case *dns.NSEC:
 					dns.Canonicalize(rrT)
-					if wz.addKnown(rr, &knownRanges, rangeset.RangeEntry[dns.Name]{Start: rrT.Hdr.Name, End: rrT.NextDomain}) {
+					if wz.addKnown(rr, knownRanges, rangeset.RangeEntry[dns.Name]{Start: rrT.Hdr.Name, End: rrT.NextDomain}) {
 						// fmt.Printf("added entry %v\n", rrT)
 						expanded = true
 					}
@@ -162,7 +165,7 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[dns.Name]) {
 
 	var thisDuped bool
 
-	for rn := range wz.unknownRanges(&knownRanges) {
+	for rn := range wz.unknownRanges(knownRanges) {
 		if rn == thisRn {
 			thisDuped = true
 			wz.mux.Lock()

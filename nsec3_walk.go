@@ -15,6 +15,7 @@ import (
 	"math/big"
 	"math/rand/v2"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 
@@ -120,25 +121,28 @@ func (wz *nsec3WalkZone) contains(hash Nsec3Hash) bool {
 // pls lock
 func (wz *nsec3WalkZone) enclosingKnownRange(hash Nsec3Hash) rangeset.RangeEntry[Nsec3Hash] {
 	var ret rangeset.RangeEntry[Nsec3Hash]
-	if len(wz.knownRanges.Ranges) == 0 {
+	if wz.knownRanges.Ranges.Len() == 0 {
 		ret.Start = nsec3HashStart
 		ret.End = nsec3HashEnd
 		return ret
 	}
 
-	idx, _ := slices.BinarySearchFunc(wz.knownRanges.Ranges, hash, func(re rangeset.RangeEntry[Nsec3Hash], h Nsec3Hash) int {
-		return bytes.Compare(re.End.H[:], h.H[:])
+	idx, _ := sort.Find(wz.knownRanges.Ranges.Len(), func(idx int) int {
+		re, _ := wz.knownRanges.Ranges.GetAt(idx)
+		return bytes.Compare(re.End.H[:], hash.H[:])
 	})
 	if idx == 0 {
 		ret.Start = nsec3HashStart
 	} else {
-		ret.Start = wz.knownRanges.Ranges[idx-1].End
+		v, _ := wz.knownRanges.Ranges.GetAt(idx - 1)
+		ret.Start = v.End
 	}
 
-	if idx == len(wz.knownRanges.Ranges) {
+	if idx == wz.knownRanges.Ranges.Len() {
 		ret.End = nsec3HashEnd
 	} else {
-		ret.End = wz.knownRanges.Ranges[idx].Start
+		v, _ := wz.knownRanges.Ranges.GetAt(idx)
+		ret.End = v.Start
 	}
 
 	return ret
@@ -149,7 +153,7 @@ func (wz nsec3WalkZone) String() string {
 
 	var nonFirst bool
 
-	for _, rn := range wz.knownRanges.Ranges {
+	for rn := range wz.iterRanges() {
 		if nonFirst {
 			sb.WriteRune(' ')
 		} else {
@@ -170,7 +174,7 @@ func nsec3Total() *big.Int {
 // pls lock
 func (wz *nsec3WalkZone) sizeKnown() *big.Int {
 	total := big.NewInt(0)
-	for _, nsecRange := range wz.knownRanges.Ranges {
+	for nsecRange := range wz.iterRanges() {
 		start := nsecRange.Start.toNum()
 		end := nsecRange.End.toNum()
 
@@ -179,6 +183,18 @@ func (wz *nsec3WalkZone) sizeKnown() *big.Int {
 	}
 
 	return total
+}
+
+func (wz *nsec3WalkZone) iterRanges() iter.Seq[rangeset.RangeEntry[Nsec3Hash]] {
+	return func(yield func(rangeset.RangeEntry[Nsec3Hash]) bool) {
+		x := wz.knownRanges.Ranges.Iter()
+		defer x.Release()
+		for x.Next() {
+			if !yield(x.Item()) {
+				return
+			}
+		}
+	}
 }
 
 func (wz *nsec3WalkZone) percentDiscovered() string {
@@ -577,7 +593,7 @@ func nsec3WalkResolve(connCache *connCache, _ *dns.Msg, zd *retryWrap[nameData, 
 		splitZone:   zd.val.name.SplitRaw(),
 		id:          zd.val.id,
 		rrTypesCh:   make(chan *dns.NSEC3),
-		knownRanges: &rangeset.RangeSet[Nsec3Hash]{Compare: nsec3Compare},
+		knownRanges: rangeset.NewRangeset(nsec3Compare, nsec3HashEnd, true),
 		busyRanges:  make(Set[rangeset.RangeEntry[Nsec3Hash]]),
 		mux:         &sync.RWMutex{},
 		sem:         semaphore.NewWeighted(1000),
@@ -738,14 +754,14 @@ func processGuess(wz *nsec3WalkZone, cancel context.CancelFunc, guess hashEntry)
 
 	wz.mux.RLock()
 	defer wz.mux.RUnlock()
-	fmt.Printf("zone=%s %d ranges %s zone discovered\n", wz.zone, len(wz.knownRanges.Ranges), wz.percentDiscovered())
+	fmt.Printf("zone=%s %d ranges %s zone discovered\n", wz.zone, wz.knownRanges.Ranges.Len(), wz.percentDiscovered())
 
-	if len(wz.knownRanges.Ranges) < 100 {
+	if wz.knownRanges.Ranges.Len() < 100 {
 		fmt.Println(wz.String())
 	}
 
-	if len(wz.knownRanges.Ranges) == 1 {
-		rn := wz.knownRanges.Ranges[0]
+	if wz.knownRanges.Ranges.Len() == 1 {
+		rn := wz.knownRanges.Ranges.Items()[0]
 		if rn.Start == nsec3HashStart && rn.End == nsec3HashEnd {
 			cancel()
 			close(wz.rrTypesCh)

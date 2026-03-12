@@ -7,13 +7,14 @@ require (
 	github.com/jellydator/ttlcache/v3 v3.4.0
 	github.com/mattn/go-sqlite3 v1.14.34
 	github.com/monoidic/dns v1.1.72
-	github.com/monoidic/rangeset v1.0.0
+	github.com/monoidic/rangeset v1.1.0
 	golang.org/x/net v0.51.0
-	golang.org/x/sync v0.19.0
+	golang.org/x/sync v0.20.0
 )
 
 require (
-	golang.org/x/mod v0.33.0 // indirect
-	golang.org/x/sys v0.41.0 // indirect
+	github.com/tidwall/btree v1.8.1 // indirect
+	golang.org/x/mod v0.34.0 // indirect
+	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/tools v0.42.0 // indirect
 )
