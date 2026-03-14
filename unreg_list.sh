@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 
-db=$(mktemp --tmpdir unreg_list.XXXXXX.sqlite3)
+db=$(mktemp ./unreg_list.XXXXXX.sqlite3)
 
 source lib.sh
 
@@ -42,6 +42,7 @@ main() {
 
     # results
     sqlite3 "$db" 'SELECT zone.name, ns.name, parent.name FROM name AS zone INNER JOIN zone_ns ON zone_ns.zone_id=zone.id INNER JOIN name AS ns ON zone_ns.ns_id=ns.id INNER JOIN name AS parent ON ns.etldp1_id=parent.id WHERE parent.registered=FALSE AND parent.valid=TRUE'
+    rm "${db}"*
 }
 
 main $*

@@ -422,7 +422,7 @@ func _getMiddle(zone dns.Name, rn rangeset.RangeEntry[dns.Name]) iter.Seq[dns.Na
 
 		startNum := big.NewInt(0)
 		endNum := big.NewInt(0)
-		endNum.SetString(maxLabelNum, 10)
+		endNum.Set(maxLabelNum)
 		var startLen, endLen int
 
 		if commonLabels < len(splitStartCopy) {
@@ -437,7 +437,7 @@ func _getMiddle(zone dns.Name, rn rangeset.RangeEntry[dns.Name]) iter.Seq[dns.Na
 		if startNum.Cmp(endNum) != -1 {
 			// startNum >= endNum
 			startNum.SetInt64(0)
-			endNum.SetString(maxLabelNum, 10)
+			endNum.Set(maxLabelNum)
 		}
 
 		commonLen := check1(dns.NameFromLabels(common)).EncodedLen()

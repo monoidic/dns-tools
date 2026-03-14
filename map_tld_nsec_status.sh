@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-db=$(mktemp --tmpdir nsec_walk.XXXXXX.sqlite3)
+db=$(mktemp ./nsec_walk.XXXXXX.sqlite3)
 
 source lib.sh
 
@@ -36,7 +36,7 @@ main() {
 
     sqlite3 $db "SELECT zone.name FROM zone_nsec_state INNER JOIN name AS zone ON zone_nsec_state.zone_id=zone.id INNER JOIN nsec_state ON zone_nsec_state.nsec_state_id=nsec_state.id WHERE nsec_state.name='nsec3' AND zone_nsec_state.opt_out=FALSE ORDER BY zone.name" > nsec3_no_optout.txt
     sqlite3 $db "SELECT zone.name FROM zone_nsec_state INNER JOIN name AS zone ON zone_nsec_state.zone_id=zone.id INNER JOIN nsec_state ON zone_nsec_state.nsec_state_id=nsec_state.id WHERE nsec_state.name='nsec3' AND zone_nsec_state.opt_out=TRUE  ORDER BY zone.name" > nsec3_optout.txt
-    rm "$db"
+    rm "${db}"*
 }
 
 main $*

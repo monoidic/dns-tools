@@ -19,7 +19,7 @@ print_out() {
             chunk_rrs=''
         fi
         chunk_rrs="${chunk_rrs} ${this_rrn}"
-    done <<< $(sqlite3 "$db" 'SELECT name.name, rr_type.name FROM zone_walk_res INNER JOIN rr_name ON zone_walk_res.rr_name_id=rr_name.id INNER JOIN rr_type ON zone_walk_res.rr_type_id=rr_type.id INNER JOIN name ON rr_name.name=name.name ORDER BY name.name, rr_type.name')
+    done <<< $(sqlite3 "$db" 'SELECT rr_name.name, rr_type.name FROM zone_walk_res INNER JOIN rr_name ON zone_walk_res.rr_name_id=rr_name.id INNER JOIN rr_type ON zone_walk_res.rr_type_id=rr_type.id ORDER BY rr_name.name, rr_type.name')
     #    ^ https://stackoverflow.com/questions/16854280/a-variable-modified-inside-a-while-loop-is-not-remembered
 
     # final chunk
@@ -41,7 +41,7 @@ main() {
 
     print_out
 
-    rm "$db"
+    rm "${db}"*
 }
 
 main $*
