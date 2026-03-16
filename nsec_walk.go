@@ -31,16 +31,11 @@ func (wz *walkZone) addKnown(rr dns.RR, rs *rangeset.RangeSet[dns.Name], rn rang
 		return false
 	}
 
-	rs.Mux.Lock()
-	// inline unlock since channel write can take a while
-
 	if rs.ContainsRange(rn) {
-		rs.Mux.Unlock()
 		return false
 	}
 
 	rs.Add(rn)
-	rs.Mux.Unlock()
 	wz.rrTypeChan <- rr
 
 	return true
@@ -49,10 +44,8 @@ func (wz *walkZone) addKnown(rr dns.RR, rs *rangeset.RangeSet[dns.Name], rn rang
 func (wz *walkZone) unknownRanges(rs *rangeset.RangeSet[dns.Name]) iter.Seq[rangeset.RangeEntry[dns.Name]] {
 	return func(yield func(rangeset.RangeEntry[dns.Name]) bool) {
 		zone := wz.zone
-		rs.Mux.RLock()
-		defer rs.Mux.RUnlock()
 
-		l := rs.Ranges.Len()
+		l := rs.Len()
 
 		if l == 0 {
 			// no known results, just give the whole zone
@@ -60,7 +53,7 @@ func (wz *walkZone) unknownRanges(rs *rangeset.RangeSet[dns.Name]) iter.Seq[rang
 			return
 		}
 
-		firstRn, _ := rs.Ranges.GetAt(0)
+		firstRn := check1(rs.Get(0))
 		firstName := firstRn.Start
 		if firstName != zone {
 			// unknown range before first known range
@@ -70,9 +63,9 @@ func (wz *walkZone) unknownRanges(rs *rangeset.RangeSet[dns.Name]) iter.Seq[rang
 		}
 
 		last := firstRn.End
+		vi := firstRn
 		for i := range l - 1 {
-			vi, _ := rs.Ranges.GetAt(i)
-			vii, _ := rs.Ranges.GetAt(i + 1)
+			vii := check1(rs.Get(i + 1))
 			start := vi.End
 			end := vii.Start
 			last = vii.End
@@ -80,6 +73,7 @@ func (wz *walkZone) unknownRanges(rs *rangeset.RangeSet[dns.Name]) iter.Seq[rang
 			if !yield(rangeset.RangeEntry[dns.Name]{Start: start, End: end}) {
 				return
 			}
+			vi = vii
 		}
 
 		if last != zone {

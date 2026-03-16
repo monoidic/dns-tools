@@ -145,7 +145,8 @@ func labelToNum(s string) *big.Int {
 
 	for i, c := range s {
 		// ret += fractIndexes[c] * pow(nFractChars, 62 - i)
-		ret.Add(&ret,
+		ret.Add(
+			&ret,
 			indexNum.Mul(
 				indexNum.SetInt64(fractIndexes[c]),
 				indexMult.Exp(

@@ -121,27 +121,27 @@ func (wz *nsec3WalkZone) contains(hash Nsec3Hash) bool {
 // pls lock
 func (wz *nsec3WalkZone) enclosingKnownRange(hash Nsec3Hash) rangeset.RangeEntry[Nsec3Hash] {
 	var ret rangeset.RangeEntry[Nsec3Hash]
-	if wz.knownRanges.Ranges.Len() == 0 {
+	if wz.knownRanges.Len() == 0 {
 		ret.Start = nsec3HashStart
 		ret.End = nsec3HashEnd
 		return ret
 	}
 
-	idx, _ := sort.Find(wz.knownRanges.Ranges.Len(), func(idx int) int {
-		re, _ := wz.knownRanges.Ranges.GetAt(idx)
+	idx, _ := sort.Find(wz.knownRanges.Len(), func(idx int) int {
+		re := check1(wz.knownRanges.Get(idx))
 		return bytes.Compare(re.End.H[:], hash.H[:])
 	})
 	if idx == 0 {
 		ret.Start = nsec3HashStart
 	} else {
-		v, _ := wz.knownRanges.Ranges.GetAt(idx - 1)
+		v := check1(wz.knownRanges.Get(idx - 1))
 		ret.Start = v.End
 	}
 
-	if idx == wz.knownRanges.Ranges.Len() {
+	if idx == wz.knownRanges.Len() {
 		ret.End = nsec3HashEnd
 	} else {
-		v, _ := wz.knownRanges.Ranges.GetAt(idx)
+		v := check1(wz.knownRanges.Get(idx))
 		ret.End = v.Start
 	}
 
@@ -153,7 +153,7 @@ func (wz nsec3WalkZone) String() string {
 
 	var nonFirst bool
 
-	for rn := range wz.iterRanges() {
+	for rn := range wz.knownRanges.Iter() {
 		if nonFirst {
 			sb.WriteRune(' ')
 		} else {
@@ -174,7 +174,7 @@ func nsec3Total() *big.Int {
 // pls lock
 func (wz *nsec3WalkZone) sizeKnown() *big.Int {
 	total := big.NewInt(0)
-	for nsecRange := range wz.iterRanges() {
+	for nsecRange := range wz.knownRanges.Iter() {
 		start := nsecRange.Start.toNum()
 		end := nsecRange.End.toNum()
 
@@ -183,18 +183,6 @@ func (wz *nsec3WalkZone) sizeKnown() *big.Int {
 	}
 
 	return total
-}
-
-func (wz *nsec3WalkZone) iterRanges() iter.Seq[rangeset.RangeEntry[Nsec3Hash]] {
-	return func(yield func(rangeset.RangeEntry[Nsec3Hash]) bool) {
-		x := wz.knownRanges.Ranges.Iter()
-		defer x.Release()
-		for x.Next() {
-			if !yield(x.Item()) {
-				return
-			}
-		}
-	}
 }
 
 func (wz *nsec3WalkZone) percentDiscovered() string {
@@ -754,14 +742,18 @@ func processGuess(wz *nsec3WalkZone, cancel context.CancelFunc, guess hashEntry)
 
 	wz.mux.RLock()
 	defer wz.mux.RUnlock()
-	fmt.Printf("zone=%s %d ranges %s zone discovered\n", wz.zone, wz.knownRanges.Ranges.Len(), wz.percentDiscovered())
+	if rand.Int()&127 == 0 {
+		fmt.Printf("zone=%s %d ranges %s zone discovered\n", wz.zone, wz.knownRanges.Len(), wz.percentDiscovered())
+	} else {
+		fmt.Printf("zone=%s %d ranges\n", wz.zone, wz.knownRanges.Len())
+	}
 
-	if wz.knownRanges.Ranges.Len() < 100 {
+	if wz.knownRanges.Len() < 100 {
 		fmt.Println(wz.String())
 	}
 
-	if wz.knownRanges.Ranges.Len() == 1 {
-		rn := wz.knownRanges.Ranges.Items()[0]
+	if wz.knownRanges.Len() == 1 {
+		rn := check1(wz.knownRanges.Get(0))
 		if rn.Start == nsec3HashStart && rn.End == nsec3HashEnd {
 			cancel()
 			close(wz.rrTypesCh)
