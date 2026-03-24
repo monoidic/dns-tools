@@ -28,6 +28,7 @@ var (
 	netCC        string
 	numProcs     int
 	retries      int
+	nsecForever  bool
 )
 
 func check(err error) {
@@ -120,6 +121,7 @@ func getArgs() (*sql.DB, []func(*sql.DB)) {
 	flag.BoolVar(&v6, "v6", false, "allow implicit v6 connections (e.g AXFR)")
 	flag.BoolVar(&allowDirectConns, "direct_conns", false, "allow direct connections to servers besides the configured nameservers")
 	flag.BoolVar(&tldZone, "tld_zone", false, "treat parsed zone files as up-to-date zone file from TLD")
+	flag.BoolVar(&nsecForever, "nsec_forever", false, "retry nsec walk forever")
 
 	if hasOpenCL {
 		flag.BoolVar(&noCL, "nocl", false, "use fallback non-OpenCL implementation for NSEC3 walking")

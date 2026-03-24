@@ -160,7 +160,7 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[dns.Name]) {
 	var thisDuped bool
 
 	for rn := range wz.unknownRanges(knownRanges) {
-		if rn == thisRn {
+		if rn == thisRn && !nsecForever {
 			thisDuped = true
 			wz.mux.Lock()
 			wz.seenCounter[thisRn]++
@@ -176,7 +176,7 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[dns.Name]) {
 		wz.wg.Go(func() { nsecWalkResolveWorker(wz, rn) })
 	}
 
-	if !thisDuped {
+	if !thisDuped && !nsecForever {
 		wz.mux.Lock()
 		delete(wz.seenCounter, thisRn)
 		wz.mux.Unlock()
