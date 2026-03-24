@@ -102,6 +102,7 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[dns.Name]) {
 	}
 
 	unknowns := slices.Collect(wz.unknownRanges(knownRanges))
+	subdomains := make(Set[dns.Name])
 
 	for _, rn := range unknowns {
 		for middle := range getMiddle(zone, rn) {
@@ -115,7 +116,7 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[dns.Name]) {
 				continue
 			}
 
-			foundSubdomains := false
+			var foundSubdomains bool
 			for _, rr := range msg.Ns {
 				switch rrT := rr.(type) {
 				case *dns.SOA:
@@ -124,6 +125,7 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[dns.Name]) {
 						// fmt.Printf("found subdomain %s of domain %s\n", soaZone, zone)
 						wz.rrTypeChan <- rr
 						foundSubdomains = true
+						subdomains.Add(soaZone)
 					}
 				case *dns.RRSIG:
 					dns.Canonicalize(rrT)
@@ -131,6 +133,7 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[dns.Name]) {
 						// fmt.Printf("found subdomain %s of domain %s\n", soaZone, zone)
 						wz.rrTypeChan <- rr
 						foundSubdomains = true
+						subdomains.Add(rrsigZone)
 					}
 				}
 			}
@@ -160,11 +163,19 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[dns.Name]) {
 
 	var thisDuped bool
 
-	for rn := range wz.unknownRanges(knownRanges) {
+	unknowns = slices.Collect(wz.unknownRanges(knownRanges))
+unkRanges:
+	for _, rn := range unknowns {
 		if rn == thisRn {
+			thisDuped = true
+			for subdomain := range subdomains {
+				if dns.IsSubDomain(subdomain, rn.Start) && dns.IsSubDomain(subdomain, rn.End) {
+					log.Printf("skip walking subdomain range %s for zone %s", rn, subdomain)
+					continue unkRanges
+				}
+			}
 			log.Printf("redoing range %s", rn)
 			if !nsecForever {
-				thisDuped = true
 				wz.mux.Lock()
 				wz.seenCounter[thisRn]++
 				doSkip := wz.seenCounter[thisRn] >= retries
