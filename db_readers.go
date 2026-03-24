@@ -74,7 +74,7 @@ func netZoneReader(db *sql.DB, extraFilter string) iter.Seq[nameData] {
 	qs := fmt.Sprintf(`
 		SELECT zone.name, zone.id
 		FROM name AS zone
-		WHERE zone.is_zone=TRUE %s
+		WHERE zone.is_zone=TRUE AND zone.valid=TRUE AND zone.registered=TRUE %s
 	`, extraFilter)
 	return getDbNameData(qs, db)
 }
