@@ -5,8 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -190,13 +192,11 @@ func anyFlagSet() bool {
 }
 
 func flagsCheck() {
-	if len(flagOrder) != len(flags) {
-		panic("length mismatch between flagOrder and flags")
-	}
+	mapFlags := slices.Sorted(maps.Keys(flags))
+	flagOrderS := slices.Clone(flagOrder)
+	slices.Sort(flagOrderS)
 
-	for _, flag := range flagOrder {
-		if _, ok := flags[flag]; !ok {
-			panic("flag " + flag + " from flagOrder has typo? missing from flags")
-		}
+	if !slices.Equal(mapFlags, flagOrderS) {
+		log.Panic("flags map and flagOrder map mismatch")
 	}
 }

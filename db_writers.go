@@ -2,8 +2,8 @@ package main
 
 import (
 	"database/sql"
-	"fmt"
 	"iter"
+	"log"
 
 	"github.com/monoidic/dns"
 )
@@ -126,7 +126,7 @@ func ipRRF(tsm *TableStmtMap, ad rrDBData) {
 	case *dns.AAAA:
 		ip = rrT.AAAA.String()
 	default:
-		panic(fmt.Sprintf("invalid IP type: %T\n", rr))
+		log.Panicf("invalid IP type: %T\n", rr)
 	}
 
 	nameID := tsm.get("name", ad.rrName.name.String())

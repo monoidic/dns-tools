@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"iter"
+	"log"
 	"math/big"
 	"slices"
 	"strings"
@@ -160,18 +161,21 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[dns.Name]) {
 	var thisDuped bool
 
 	for rn := range wz.unknownRanges(knownRanges) {
-		if rn == thisRn && !nsecForever {
-			thisDuped = true
-			wz.mux.Lock()
-			wz.seenCounter[thisRn]++
-			doSkip := wz.seenCounter[thisRn] >= retries
-			if doSkip {
-				delete(wz.seenCounter, thisRn)
+		if rn == thisRn {
+			log.Printf("redoing range %s", rn)
+			if !nsecForever {
+				thisDuped = true
+				wz.mux.Lock()
+				wz.seenCounter[thisRn]++
+				doSkip := wz.seenCounter[thisRn] >= retries
+				if doSkip {
+					delete(wz.seenCounter, thisRn)
+					wz.mux.Unlock()
+					fmt.Printf("skipped range: %s\n", rn)
+					continue
+				}
 				wz.mux.Unlock()
-				fmt.Printf("skipped range: %s\n", rn)
-				continue
 			}
-			wz.mux.Unlock()
 		}
 		wz.wg.Go(func() { nsecWalkResolveWorker(wz, rn) })
 	}
@@ -362,11 +366,11 @@ func _getMiddle(zone dns.Name, rn rangeset.RangeEntry[dns.Name]) iter.Seq[dns.Na
 		splitEnd := end.SplitRaw()
 
 		if !(end == zone || end == rootName) && splitEnd == nil {
-			panic(fmt.Sprintf("end splits to nil: %s", end))
+			log.Panicf("end splits to nil: %s", end)
 		}
 
 		if (!(start == zone || start == rootName)) && splitStart == nil {
-			panic(fmt.Sprintf("start splits to nil: %s", start))
+			log.Panicf("start splits to nil: %s", start)
 		}
 
 		splitStartCopy := slices.Clone(splitStart)

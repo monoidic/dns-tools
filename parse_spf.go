@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"log"
 	"net/netip"
 	"regexp"
 	"strconv"
@@ -374,7 +375,7 @@ func getPatternNameMap(pattern *regexp.Regexp) map[string]int {
 			continue
 		}
 		if _, ok := ret[key]; ok {
-			panic("duplicate key: " + key)
+			log.Panicf("duplicate key: %s", key)
 		}
 		ret[key] = i
 	}

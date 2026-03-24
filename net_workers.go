@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"iter"
+	"log"
 	"net"
 	"strings"
 	"sync"
@@ -717,7 +718,7 @@ func rdnsResolve(connCache *connCache, msg *dns.Msg, fd *retryWrap[fieldData, em
 		msg.Question[0].Name = addr
 	} else {
 		fmt.Printf("fd.val.name = %q\n", fd.val.name)
-		panic(err)
+		log.Panic(err)
 	}
 	var res *dns.Msg
 	var results []dns.PTR
