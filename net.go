@@ -464,8 +464,10 @@ func netWriterTable[inType, resultType, tmpType any](db *sql.DB, seq iter.Seq[in
 	}()
 
 	tx := check1(db.Begin())
+	defer func() { check(tx.Commit()) }()
 
 	tsm := getTableStmtMap(tablesFields, namesStmts, tx)
+	defer tsm.clear()
 
 	chanWorkers(dataOutChan, numProcs, func() { workerF(out, inHigh, dataOutChan, &retryWg, tsm) })
 
@@ -487,9 +489,6 @@ func netWriterTable[inType, resultType, tmpType any](db *sql.DB, seq iter.Seq[in
 
 		insertF(tsm, datum)
 	}
-
-	tsm.clear()
-	check(tx.Commit())
 }
 
 func retryWrapper[inType, resultType any](seq iter.Seq[inType], retryChan chan<- retryWrap[inType, resultType], wg *sync.WaitGroup) {
@@ -517,6 +516,7 @@ func netIP(db *sql.DB) {
 	SELECT name.name, id
 	FROM name
 	WHERE (is_ns=TRUE OR is_mx=TRUE) AND addr_resolved=FALSE
+	AND name.is_zone=TRUE AND name.registered=TRUE AND name.valid=TRUE
 `, db), netIPWriter)
 }
 
@@ -542,6 +542,7 @@ func spf(db *sql.DB) {
 	FROM name
 	INNER JOIN name_mx ON name_mx.name_id=name.id
 	WHERE name.spf_tried=FALSE
+	AND name.is_zone=TRUE AND name.registered=TRUE AND name.valid=TRUE
 `, db), spfRRWriter)
 }
 
@@ -551,6 +552,7 @@ func spfLinks(db *sql.DB) {
 	FROM name
 	INNER JOIN spf_name ON spf_name.name_id=name.id
 	WHERE spf_name.spfname=TRUE AND name.spf_tried=FALSE
+	AND name.is_zone=TRUE AND name.registered=TRUE AND name.valid=TRUE
 `, db), spfRRWriter)
 }
 

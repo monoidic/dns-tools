@@ -1,6 +1,8 @@
 package main
 
 import (
+	"cmp"
+	"errors"
 	"fmt"
 	"iter"
 	"math/big"
@@ -96,91 +98,241 @@ func reverseASCII(s string) string {
 
 const labelChars = "-0123456789_abcdefghijklmnopqrstuvwxyz"
 
-// (len(labelChars) ** 63) - 1
-var maxLabelNum, _ = (&big.Int{}).SetString("3360211291428788092142712546522052463429324340985584366991884014475006149629779669799771752913436671", 10)
+type labelConverter struct {
+	alphabet    string
+	mults       []big.Int
+	maxLabelNum *big.Int
+}
 
-var fractIndexes = fractIndex()
+const (
+	MAX_LABEL_LEN = 63
+	MAX_NAME_LEN  = 255
+)
 
-func fractIndex() map[rune]int64 {
-	ret := make(map[rune]int64, len(labelChars))
-	for i, c := range labelChars {
-		ret[c] = int64(i)
+func newLabelConverter(alphabet string) *labelConverter {
+	mults := make([]big.Int, MAX_LABEL_LEN)
+	alphaLen := big.NewInt(int64(len(alphabet)))
+	iter := big.NewInt(0)
+
+	for i := range MAX_LABEL_LEN {
+		iter.Mul(iter, alphaLen)
+		iter.Add(iter, big1)
+		mults[i].Set(iter)
 	}
-	return ret
+
+	iter.Mul(iter, alphaLen)
+	iter.Sub(iter, big1)
+
+	return &labelConverter{
+		alphabet:    alphabet,
+		mults:       mults,
+		maxLabelNum: iter,
+	}
+}
+
+var (
+	bigneg1 = big.NewInt(-1)
+	big0    = big.NewInt(0)
+	big1    = big.NewInt(1)
+)
+
+// converts a DNS label into a bigint
+func (lc *labelConverter) labelToNum(labelS string) (*big.Int, error) {
+	label := []byte(labelS)
+	if !(1 <= len(label) && len(label) <= MAX_LABEL_LEN) {
+		return nil, errInvalidLabel
+	}
+
+	multI := MAX_LABEL_LEN - 1
+
+	tmp := &big.Int{}
+
+	ret := (&big.Int{}).SetInt64(int64(len(label) - 1))
+
+	for _, v := range label {
+		idx := strings.IndexByte(lc.alphabet, v)
+		if idx == -1 {
+			return nil, errLabelCharset
+		}
+		tmp.SetInt64(int64(idx))
+		tmp.Mul(tmp, &lc.mults[multI])
+		ret.Add(ret, tmp)
+		multI--
+	}
+
+	return ret, nil
 }
 
 // convert a bigint into a DNS label
-func numToLabel(num *big.Int, length int) string {
-	if !(length >= 1 && length <= 63) {
-		panic("invalid label length")
+func (lc *labelConverter) numToLabel(num *big.Int) (string, error) {
+	if !lc.numValid(num) {
+		return "", errInvalidLabelNum
 	}
 
-	buf := make([]byte, length)
-	var numIt, div, power, nFractChars, indexMult big.Int
+	// local copy
+	num = (&big.Int{}).Set(num)
 
-	numIt.Set(num)
-	nFractChars.SetInt64(int64(len(labelChars)))
+	multI := MAX_LABEL_LEN - 1
 
-	for i := range length {
-		// div, numIt = divmod(numIt, pow(nFractChars, 62 - i))
-		div.DivMod(
-			&numIt,
-			indexMult.Exp(
-				&nFractChars,
-				power.SetInt64(62-int64(i)),
-				nil,
-			),
-			&numIt,
-		)
-		buf[i] = labelChars[div.Int64()]
+	var ret []byte
+	chunk := &big.Int{}
+
+	for num.Cmp(bigneg1) == 1 {
+		chunk.QuoRem(num, &lc.mults[multI], num)
+		ret = append(ret, lc.alphabet[chunk.Uint64()])
+
+		num.Sub(num, big1)
+		multI--
 	}
 
-	return string(buf)
+	return string(ret), nil
 }
 
-// converts a DNS label into a bigint
-func labelToNum(s string) *big.Int {
-	var ret, power, indexMult, indexNum, nFractChars big.Int
-	nFractChars.SetInt64(int64(len(labelChars)))
-
-	for i, c := range s {
-		// ret += fractIndexes[c] * pow(nFractChars, 62 - i)
-		ret.Add(
-			&ret,
-			indexNum.Mul(
-				indexNum.SetInt64(fractIndexes[c]),
-				indexMult.Exp(
-					&nFractChars,
-					power.SetInt64(62-int64(i)),
-					nil,
-				),
-			),
-		)
-	}
-
-	return &ret
+func (lc *labelConverter) numValid(num *big.Int) bool {
+	return num.Cmp(big0) >= 0 && num.Cmp(lc.maxLabelNum) <= 0
 }
 
-func splitAscii(start, end *big.Int, n, length int) iter.Seq[string] {
+func (lc *labelConverter) prevWithLen(num *big.Int, length int, repeatOk bool) (*big.Int, bool) {
+	if !lc.numValid(num) {
+		return nil, false
+	}
+
+	// local copy
+	num = (&big.Int{}).Set(num)
+
+	if !repeatOk {
+		// ensure we can't just return the same value
+		num.Sub(num, big1)
+	}
+
+	tmp := &big.Int{}
+
+	for {
+		if num.Cmp(big0) == -1 {
+			return nil, false
+		}
+
+		label, err := lc.numToLabel(num)
+		if err != nil {
+			return nil, false
+		}
+
+		switch cmp.Compare(len(label), length) {
+		case 0: // match
+			return num, true
+		case -1: // current label is shorter than target
+			tmp.SetInt64(int64(len(label) - 1))
+			num.Sub(num, tmp)
+		case 1: // current label is longer than target
+			// seek back from e.g "abc" to "aba", then back 1 to "ab"
+			// num -= label[-1] * mult[-len(label)]
+			v := strings.IndexByte(lc.alphabet, label[len(label)-1])
+			tmp.SetInt64(int64(v))
+			tmp.Mul(tmp, &lc.mults[MAX_LABEL_LEN-len(label)])
+			tmp.Add(tmp, big1)
+
+			num.Sub(num, tmp)
+		}
+	}
+}
+
+func (lc *labelConverter) nextWithLen(num *big.Int, length int, repeatOk bool) (*big.Int, bool) {
+	if !lc.numValid(num) {
+		return nil, false
+	}
+
+	// local copy
+	num = (&big.Int{}).Set(num)
+
+	if !repeatOk {
+		// ensure we can't just return the same value
+		num.Add(num, big1)
+	}
+
+	tmp := &big.Int{}
+
+	for {
+		if num.Cmp(lc.maxLabelNum) == 1 {
+			return nil, false
+		}
+
+		label, err := lc.numToLabel(num)
+		if err != nil {
+			return nil, false
+		}
+
+		switch cmp.Compare(len(label), length) {
+		case 0: // match
+			return num, true
+		case -1: // current label is shorter than target
+			// just walk forwards by the diff lol
+			//			log.Printf("%s -1 iter %d", num, iterNum)
+			tmp.SetInt64(int64(length - len(label)))
+			num.Add(num, tmp)
+		case 1: // current label is longer than target
+			// go to next break on this label length
+			// num += (len(alphabet)-label[-1]) * mult[len(label)-1]
+			//			log.Printf("%s 1 length %d iter %d", num, length, iterNum)
+			v := len(lc.alphabet) - strings.IndexByte(lc.alphabet, label[len(label)-1])
+			tmp.SetInt64(int64(v))
+			tmp.Mul(tmp, &lc.mults[MAX_LABEL_LEN-len(label)])
+
+			num.Add(num, tmp)
+		}
+	}
+}
+
+func (lc *labelConverter) bisectLabel(start, end *big.Int, length int) iter.Seq[string] {
+	// TODO use length for calculating division mask or something
+	// TODO FINISH THIS FUNCTION
 	return func(yield func(string) bool) {
-		var num, nBig, iBig, diff, itNum big.Int
+		var mid big.Int
 
-		// diff = (end - start) / n
-		diff.Div(
-			num.Sub(end, start),
-			nBig.SetInt64(int64(n)),
-		)
+		rnd := rand.New(rand.NewSource(rand.Int63()))
 
-		for i := range n - 1 {
-			// itNum = start + i * diff
-			itNum.Add(start, itNum.Mul(&diff, iBig.SetInt64(int64(i+1))))
-			s := numToLabel(&itNum, length)
-			if !yield(s) {
+		// get a random number in the range of start to end
+		mid.Sub(end, start)
+		mid.Rand(rnd, &mid)
+		mid.Add(start, &mid)
+
+		label, err := lc.numToLabel(&mid)
+		if err != nil {
+			return
+		}
+
+		if len(label) == length {
+			if !yield(label) {
+				return
+			}
+		}
+
+		for _, f := range []func(*big.Int, int, bool) (*big.Int, bool){lc.nextWithLen, lc.prevWithLen} {
+			num, ok := f(&mid, length, false)
+			if !ok {
+				continue
+			}
+			label, err := lc.numToLabel(num)
+			if err != nil {
+				continue
+			}
+			if !yield(label) {
 				return
 			}
 		}
 	}
 }
+
+var (
+	// very limited range
+	lcAscii = newLabelConverter("-0123456789_abcdefghijklmnopqrstuvwxyz")
+	// more symbols
+	lcSymbols = newLabelConverter("!#$%&*+-/0123456789:;<=>?@[]^_`abcdefghijklmnopqrstuvwxyz{|}~")
+	// full valid label range
+	lcFull             = newLabelConverter("\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !\"#$%&'()*+,-./0123456789:;<=>?@[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff")
+	errInvalidLabel    = errors.New("invalid label for this label converter")
+	errInvalidLabelNum = errors.New("invalid label num for this label converter")
+	errLabelCharset    = errors.New("invalid label for given label converter")
+)
 
 type retryWrap[inType, tmpType any] struct {
 	// wrapped value

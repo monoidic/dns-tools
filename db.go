@@ -74,12 +74,11 @@ type nsecWalkResolveRes struct {
 
 func initDb(db *sql.DB) {
 	tx := check1(db.Begin())
+	defer func() { check(tx.Commit()) }()
 
 	for stmt := range strings.SplitSeq(initStmtsRaw, ";\n") {
 		check1(tx.Exec(stmt))
 	}
-
-	check(tx.Commit())
 }
 
 func getTableStmtMap(tablesFields, namesStmts map[string]string, tx *sql.Tx) *TableStmtMap {
@@ -251,8 +250,10 @@ func createROGetF(tx *sql.Tx, tableName string, valueName string) (ttlcache.Opti
 
 func insertRR[rrType any](db *sql.DB, seq iter.Seq[rrType], tablesFields, namesStmts map[string]string, rrF rrF[rrType]) {
 	tx := check1(db.Begin())
+	defer func() { check(tx.Commit()) }()
 
 	tsm := getTableStmtMap(tablesFields, namesStmts, tx)
+	defer tsm.clear()
 
 	i := CHUNKSIZE
 
@@ -273,9 +274,6 @@ func insertRR[rrType any](db *sql.DB, seq iter.Seq[rrType], tablesFields, namesS
 
 		rrF(tsm, rrD)
 	}
-
-	tsm.clear()
-	check(tx.Commit())
 }
 
 func getZone2RR(filter string, db *sql.DB) iter.Seq[rrDBData] {
@@ -293,7 +291,7 @@ func getZone2RR(filter string, db *sql.DB) iter.Seq[rrDBData] {
 			WHERE zone2rr.parsed=FALSE AND %s
 		`, filter)
 		tx := check1(db.Begin())
-		defer tx.Commit()
+		defer func() { check(tx.Commit()) }()
 		rows := check1(tx.Query(qs))
 		defer rows.Close()
 
@@ -317,7 +315,7 @@ func getZone2RR(filter string, db *sql.DB) iter.Seq[rrDBData] {
 func getUnqueriedNsecRes(db *sql.DB) iter.Seq[rrDBData] {
 	return func(yield func(rrDBData) bool) {
 		tx := check1(db.Begin())
-		defer tx.Commit()
+		defer func() { check(tx.Commit()) }()
 		rows := check1(tx.Query(`
 		SELECT
 			zone_walk_res.zone_id, zone_walk_res.id,

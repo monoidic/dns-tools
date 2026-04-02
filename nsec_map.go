@@ -131,7 +131,7 @@ func checkNsecWorker(dataChan <-chan retryWrap[nameData, empty], refeedChan chan
 
 func zoneRandomName(zone dns.Name) dns.Name {
 	var label string
-	if remaining := 255 - zone.EncodedLen() - 2; remaining < 63 {
+	if remaining := MAX_NAME_LEN - zone.EncodedLen() - 2; remaining < MAX_LABEL_LEN {
 		label = string(randomLabelLen(max(1, remaining-2), remaining)[1:])
 	} else {
 		label = string(randomLabel()[1:])

@@ -279,7 +279,7 @@ const nsec3walkcharset = "0123456789abcdefghijklmnopqrstuvwxyz"
 
 // generate random (pre-encoded) DNS label for a string matching the pattern ^[0-9a-z]{20,63}$
 func randomLabel() []byte {
-	length := rangeRandNum(20, 63)
+	length := rangeRandNum(20, MAX_LABEL_LEN)
 	ret := make([]byte, length+1)
 	ret[0] = byte(length)
 	for i := range length {
@@ -423,6 +423,7 @@ func nsec3Walk(db *sql.DB) {
 	WHERE nsec_state.name='nsec3'
 	AND zone.nsec_walked=FALSE
 	AND zone.inserted=FALSE
+	AND zone.is_zone=TRUE AND zone.registered=TRUE AND zone.valid=TRUE
 `, db), nsec3WalkMaster)
 }
 
@@ -558,8 +559,7 @@ func nsec3WalkInsert(tsm *TableStmtMap, zw *nsec3WalkZone) {
 	}
 
 	if zw.err != nil {
-		tsm.tx.Rollback()
-		log.Panic(zw.err)
+		log.Panic(errors.Join(tsm.tx.Rollback(), zw.err))
 	}
 
 	tsm.exec("set_walked", zoneID)

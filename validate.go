@@ -220,16 +220,18 @@ func insertPSL(db *sql.DB) {
 
 func validateZones(db *sql.DB) {
 	readerWriter("validating zones", db, getDbNameData(`
-	SELECT name, id
+	SELECT zone.name, zone.id
 	FROM name AS zone
-	WHERE valid_tried=FALSE
+	WHERE zone.valid_tried=FALSE
+	AND zone.is_zone=TRUE AND zone.registered=TRUE AND zone.valid=TRUE
 `, db), validWriter)
 }
 
 func maybeZone(db *sql.DB) {
 	readerWriter("resolving maybe-zones", db, getDbNameData(`
-	SELECT name.name, name.id
+	SELECT zone.name, zone.id
 	FROM name
-	WHERE name.maybe_zone=TRUE
+	WHERE zone.maybe_zone=TRUE
+	AND AND zone.registered=TRUE AND zone.valid=TRUE
 `, db), maybeZoneWriter)
 }

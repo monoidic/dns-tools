@@ -223,7 +223,7 @@ func checkUpReader(db *sql.DB) iter.Seq[checkUpData] {
 	return func(yield func(checkUpData) bool) {
 		// each NS IP and one zone it is meant to serve
 		tx := check1(db.Begin())
-		defer tx.Commit()
+		defer func() { check(tx.Commit()) }()
 		var v4Filter string
 		if !v6 {
 			v4Filter = `AND ip.address LIKE '%.%'`
@@ -234,7 +234,9 @@ func checkUpReader(db *sql.DB) iter.Seq[checkUpData] {
 			INNER JOIN name AS zone ON zone_ns.zone_id = zone.id
 			INNER JOIN name_ip ON name_ip.name_id = zone_ns.ns_id
 			INNER JOIN ip ON name_ip.ip_id = ip.id
-			WHERE ip.resp_checked=FALSE AND zone.is_zone=TRUE %s
+			WHERE ip.resp_checked=FALSE AND zone.is_zone=TRUE
+			AND zone.is_zone=TRUE AND zone.registered=TRUE AND zone.valid=TRUE
+			%s
 			GROUP BY ip.id
 		`, v4Filter)
 		rows := check1(tx.Query(qs))
@@ -265,10 +267,11 @@ func zoneIPReader(db *sql.DB) iter.Seq[zoneIP] {
 		INNER JOIN name AS zone ON zone_ns_ip.zone_id=zone.id
 		INNER JOIN ip ON zone_ns_ip.ip_id = ip.id
 		WHERE ip.responsive=TRUE AND zone_ns_ip.axfr_tried=FALSE
+		AND zone.is_zone=TRUE AND zone.registered=TRUE AND zone.valid=TRUE
 	`
 
 		tx := check1(db.Begin())
-		defer tx.Commit()
+		defer func() { check(tx.Commit()) }()
 		rows := check1(tx.Query(qs))
 		defer rows.Close()
 

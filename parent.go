@@ -27,11 +27,10 @@ func nameParents(name dns.Name) []dns.Name {
 
 func mapZoneParents(db *sql.DB) {
 	readerWriter("mapping zone parents", db, getDbNameData(`
-	SELECT name, id
-	FROM name
-	WHERE
-	parent_mapped=FALSE
-	AND valid=TRUE
+	SELECT zone.name, zone.id
+	FROM name AS zone
+	WHERE zone.parent_mapped=FALSE
+	AND zone.is_zone=TRUE AND zone.registered=TRUE AND zone.valid=TRUE
 `, db), parentCheck)
 }
 

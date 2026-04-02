@@ -11,7 +11,7 @@ import (
 func getDbFieldData(qs string, db *sql.DB) iter.Seq[fieldData] {
 	return func(yield func(fieldData) bool) {
 		tx := check1(db.Begin())
-		defer tx.Commit()
+		defer func() { check(tx.Commit()) }()
 		rows := check1(tx.Query(qs))
 		defer rows.Close()
 
@@ -45,6 +45,7 @@ func getUnqueriedDMARC(db *sql.DB) iter.Seq[nameData] {
 		FROM name
 		INNER JOIN name_mx ON name_mx.name_id=name.id
 		WHERE name.dmarc_tried=FALSE
+		AND name.registered=TRUE AND name.valid=TRUE
 	`, db) {
 			fd.name, err = dns.NameFromLabels(append([]string{"_dmarc"}, fd.name.SplitRaw()...))
 			if err == nil && !yield(fd) {
@@ -74,7 +75,8 @@ func netZoneReader(db *sql.DB, extraFilter string) iter.Seq[nameData] {
 	qs := fmt.Sprintf(`
 		SELECT zone.name, zone.id
 		FROM name AS zone
-		WHERE zone.is_zone=TRUE AND zone.valid=TRUE AND zone.registered=TRUE %s
+		WHERE zone.is_zone=TRUE AND zone.registered=TRUE AND zone.valid=TRUE
+		%s
 	`, extraFilter)
 	return getDbNameData(qs, db)
 }
@@ -87,11 +89,11 @@ func zoneNsIpReader(db *sql.DB) iter.Seq[zoneIP] {
 		INNER JOIN name AS zone ON zone_ns.zone_id = zone.id
 		INNER JOIN name_ip ON zone_ns.ns_id = name_ip.name_id
 		INNER JOIN ip ON name_ip.ip_id = ip.id
-		WHERE zone.is_zone=TRUE
+		WHERE zone.is_zone=TRUE AND zone.registered=TRUE AND zone.valid=TRUE
 	`
 
 		tx := check1(db.Begin())
-		defer tx.Commit()
+		defer func() { check(tx.Commit()) }()
 		rows := check1(tx.Query(qs))
 		defer rows.Close()
 
@@ -118,10 +120,12 @@ func zoneNsIpParentReader(db *sql.DB) iter.Seq[zoneIP] {
 		INNER JOIN ip ON name_ip.ip_id = ip.id
 		WHERE zone.is_zone=TRUE AND parent.is_zone=TRUE
 		AND ip.responsive=TRUE
+		AND zone.registered=TRUE AND zone.valid=TRUE
+		AND parent.registered=TRUE AND parent.valid=TRUE
 	`
 
 		tx := check1(db.Begin())
-		defer tx.Commit()
+		defer func() { check(tx.Commit()) }()
 		rows := check1(tx.Query(qs))
 		defer rows.Close()
 
@@ -146,10 +150,11 @@ func parentNSReader(db *sql.DB) iter.Seq[zoneIP] {
 		INNER JOIN ip ON zone_ns_ip_glue.ip_id=ip.id
 		WHERE zone_ns_ip_glue.fetched=FALSE
 		AND ip.responsive=TRUE
+		AND zone.is_zone=TRUE AND zone.registered=TRUE AND zone.valid=TRUE
 	`
 
 		tx := check1(db.Begin())
-		defer tx.Commit()
+		defer func() { check(tx.Commit()) }()
 		rows := check1(tx.Query(qs))
 		defer rows.Close()
 

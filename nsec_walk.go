@@ -334,6 +334,7 @@ rrLoop:
 		rrT := rr.(*dns.NSEC)
 		rrName := rrT.Hdr.Name
 		rrNameID := tsm.get("rr_name", rrName.String())
+		// TODO detect wildcards via dns.RRSIG.Labels?
 
 	rrtLoop:
 		for rrType := range rrT.TypeBitMap.Iter {
@@ -364,6 +365,7 @@ func nsecWalk(db *sql.DB) {
 	WHERE nsec_state.name='plain_nsec'
 	AND zone.nsec_walked=FALSE
 	AND zone.inserted=FALSE
+	AND zone.is_zone=TRUE AND zone.registered=TRUE AND zone.valid=TRUE
 `, db), nsecWalkMaster)
 }
 
@@ -429,39 +431,63 @@ func _getMiddle(zone dns.Name, rn rangeset.RangeEntry[dns.Name]) iter.Seq[dns.Na
 			}
 		}
 
-		startNum := big.NewInt(0)
-		endNum := big.NewInt(0)
-		endNum.Set(maxLabelNum)
-		var startLen, endLen int
+		startNum := &big.Int{}
+		endNum := &big.Int{}
 
-		if commonLabels < len(splitStartCopy) {
-			startNum = labelToNum(splitStartCopy[commonLabels])
-			startLen = len(splitStartCopy[commonLabels])
-		}
-		if commonLabels < len(splitEndCopy) {
-			endNum = labelToNum(splitEndCopy[commonLabels])
-			endLen = len(splitEndCopy[commonLabels])
-		}
+		for _, lc := range []*labelConverter{lcAscii, lcSymbols, lcFull} {
+			startNum.Set(big0)
+			endNum.Set(lc.maxLabelNum)
+			var startLen, endLen int
 
-		if startNum.Cmp(endNum) != -1 {
-			// startNum >= endNum
-			startNum.SetInt64(0)
-			endNum.Set(maxLabelNum)
-		}
-
-		commonLen := check1(dns.NameFromLabels(common)).EncodedLen()
-
-		splitALen := min(max(20, min(63, 2+max(startLen, endLen))), 255-commonLen-2)
-		for splitS := range splitAscii(startNum, endNum, 2, splitALen) {
-			if res, err := dns.NameFromLabels(append([]string{splitS}, common...)); err == nil && !yield(res) {
-				return
+			if commonLabels < len(splitStartCopy) {
+				startNumX, err := lc.labelToNum(splitStartCopy[commonLabels])
+				if err != nil {
+					continue
+				}
+				startNum.Set(startNumX)
+				startLen = len(splitStartCopy[commonLabels])
 			}
-		}
+			if commonLabels < len(splitEndCopy) {
+				endNumX, err := lc.labelToNum(splitEndCopy[commonLabels])
+				if err != nil {
+					continue
+				}
+				endNum.Set(endNumX)
+				endLen = len(splitEndCopy[commonLabels])
+			}
 
-		if len(splitStartCopy) < len(splitEndCopy) && dns.IsSubDomain(start, end) {
-			startNum := big.NewInt(0)
-			endNum := labelToNum(splitEndCopy[commonLabels])
-			for splitS := range splitAscii(startNum, endNum, 2, 20) {
+			if startNum.Cmp(endNum) != -1 {
+				// startNum >= endNum
+				startNum.SetInt64(0)
+				endNum.Set(lc.maxLabelNum)
+			}
+
+			commonLen := check1(dns.NameFromLabels(common)).EncodedLen()
+
+			// try to be at least a bit longer than the start/end of the range
+			splitALen := 2 + max(startLen, endLen)
+			// try to be at least 10 characters regardless
+			splitALen = max(splitALen, 10)
+			// clamp according to protocol-defined max label/name limits
+			splitALen = min(splitALen, MAX_NAME_LEN-commonLen-2, MAX_LABEL_LEN)
+			for splitS := range lc.bisectLabel(startNum, endNum, splitALen) {
+				if res, err := dns.NameFromLabels(append([]string{splitS}, common...)); err == nil && !yield(res) {
+					return
+				}
+			}
+
+			if !(len(splitStartCopy) < len(splitEndCopy) && dns.IsSubDomain(start, end)) {
+				continue
+			}
+
+			startNum.Set(big0)
+			endNumX, err := lc.labelToNum(splitEndCopy[commonLabels])
+			if err != nil {
+				continue
+			}
+			endNum.Set(endNumX)
+
+			for splitS := range lc.bisectLabel(startNum, endNum, 20) {
 				if res, err := dns.NameFromLabels(append([]string{splitS}, common...)); err == nil && !yield(res) {
 					return
 				}
