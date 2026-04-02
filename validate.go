@@ -232,6 +232,6 @@ func maybeZone(db *sql.DB) {
 	SELECT zone.name, zone.id
 	FROM name
 	WHERE zone.maybe_zone=TRUE
-	AND AND zone.registered=TRUE AND zone.valid=TRUE
+	AND zone.registered=TRUE AND zone.valid=TRUE
 `, db), maybeZoneWriter)
 }
