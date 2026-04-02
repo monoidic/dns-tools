@@ -230,7 +230,7 @@ func validateZones(db *sql.DB) {
 func maybeZone(db *sql.DB) {
 	readerWriter("resolving maybe-zones", db, getDbNameData(`
 	SELECT zone.name, zone.id
-	FROM name
+	FROM name AS zone
 	WHERE zone.maybe_zone=TRUE
 	AND zone.registered=TRUE AND zone.valid=TRUE
 `, db), maybeZoneWriter)
