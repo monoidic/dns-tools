@@ -234,8 +234,9 @@ func checkUpReader(db *sql.DB) iter.Seq[checkUpData] {
 			INNER JOIN name AS zone ON zone_ns.zone_id = zone.id
 			INNER JOIN name_ip ON name_ip.name_id = zone_ns.ns_id
 			INNER JOIN ip ON name_ip.ip_id = ip.id
-			WHERE ip.resp_checked=FALSE AND zone.is_zone=TRUE
+			WHERE ip.resp_checked=FALSE
 			AND zone.is_zone=TRUE AND zone.registered=TRUE AND zone.valid=TRUE
+			AND ip.responsive=TRUE
 			%s
 			GROUP BY ip.id
 		`, v4Filter)

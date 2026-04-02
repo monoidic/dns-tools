@@ -41,11 +41,10 @@ func getUnqueriedDMARC(db *sql.DB) iter.Seq[nameData] {
 	return func(yield func(nameData) bool) {
 		var err error
 		for fd := range getDbNameData(`
-		SELECT DISTINCT name.name, name.id
-		FROM name
-		INNER JOIN name_mx ON name_mx.name_id=name.id
-		WHERE name.dmarc_tried=FALSE
-		AND name.registered=TRUE AND name.valid=TRUE
+		SELECT DISTINCT zone.name, zone.id
+		FROM name AS zone
+		WHERE zone.dmarc_tried=FALSE
+		AND zone.is_zone=TRUE AND zone.registered=TRUE AND zone.valid=TRUE
 	`, db) {
 			fd.name, err = dns.NameFromLabels(append([]string{"_dmarc"}, fd.name.SplitRaw()...))
 			if err == nil && !yield(fd) {

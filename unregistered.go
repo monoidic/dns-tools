@@ -76,9 +76,9 @@ func unregisteredWrite(tsm *TableStmtMap, reg regStatus) {
 
 func getUnregisteredDomains(db *sql.DB) {
 	readerWriter("finding unregistered domains", db, getDbNameData(`
-	SELECT name.name, name.id
-	FROM name
-	WHERE name.reg_checked=FALSE
-	AND name.is_zone=TRUE AND name.registered=TRUE AND name.valid=TRUE
+	SELECT zone.name, zone.id
+	FROM name AS zone
+	WHERE zone.reg_checked=FALSE
+	AND zone.is_zone=TRUE AND zone.registered=TRUE AND zone.valid=TRUE
 `, db), detectUnregisteredDomains)
 }

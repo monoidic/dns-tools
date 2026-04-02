@@ -516,7 +516,7 @@ func netIP(db *sql.DB) {
 	SELECT name.name, id
 	FROM name
 	WHERE (is_ns=TRUE OR is_mx=TRUE) AND addr_resolved=FALSE
-	AND name.is_zone=TRUE AND name.registered=TRUE AND name.valid=TRUE
+	AND name.registered=TRUE AND name.valid=TRUE
 `, db), netIPWriter)
 }
 
@@ -542,7 +542,7 @@ func spf(db *sql.DB) {
 	FROM name
 	INNER JOIN name_mx ON name_mx.name_id=name.id
 	WHERE name.spf_tried=FALSE
-	AND name.is_zone=TRUE AND name.registered=TRUE AND name.valid=TRUE
+	AND name.registered=TRUE AND name.valid=TRUE
 `, db), spfRRWriter)
 }
 
@@ -552,7 +552,7 @@ func spfLinks(db *sql.DB) {
 	FROM name
 	INNER JOIN spf_name ON spf_name.name_id=name.id
 	WHERE spf_name.spfname=TRUE AND name.spf_tried=FALSE
-	AND name.is_zone=TRUE AND name.registered=TRUE AND name.valid=TRUE
+	AND name.registered=TRUE AND name.valid=TRUE
 `, db), spfRRWriter)
 }
 
