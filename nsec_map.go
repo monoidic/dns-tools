@@ -107,7 +107,7 @@ func getNsecState(nsecSigs []*dns.NSEC, nsec3Sigs []*dns.NSEC3) (string, string,
 
 		nsecS = strings.Join(nsecSArr, "&")
 
-		return "nsec_confusion", nsecS, false
+		return "bogus", nsecS, false
 	}
 }
 
@@ -148,25 +148,16 @@ func checkNsecQuery(connCache *connCache, msg *dns.Msg, fd *retryWrap[nameData, 
 	var res *dns.Msg
 
 	nmr.zoneID = fd.val.id
+	zone := fd.val.name
 
-	msg.Question[0].Name = zoneRandomName(fd.val.name)
+	msg.Question[0].Name = zoneRandomName(zone)
 
 	res, err = plainResolveRandom(msg, connCache)
 	if err != nil {
 		return
 	}
 
-	var nsecSigs []*dns.NSEC
-	var nsec3Sigs []*dns.NSEC3
-
-	for _, rr := range res.Ns { // authority section
-		switch rrT := rr.(type) {
-		case *dns.NSEC:
-			nsecSigs = append(nsecSigs, rrT)
-		case *dns.NSEC3:
-			nsec3Sigs = append(nsec3Sigs, rrT)
-		}
-	}
+	nsecSigs, nsec3Sigs := filteredNsecs(zone, res)
 
 	nsecState, nsecS, optOut = getNsecState(nsecSigs, nsec3Sigs)
 

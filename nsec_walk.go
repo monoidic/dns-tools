@@ -7,6 +7,7 @@ import (
 	"iter"
 	"log"
 	"math/big"
+	"math/rand"
 	"slices"
 	"strings"
 	"sync"
@@ -142,15 +143,13 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[dns.Name]) {
 				continue
 			}
 
+			nsecSigs, _ := filteredNsecs(wz.zone, msg)
+
 			var expanded bool
-			for _, rr := range msg.Ns {
-				switch rrT := rr.(type) {
-				case *dns.NSEC:
-					dns.Canonicalize(rrT)
-					if wz.addKnown(rr, knownRanges, rangeset.RangeEntry[dns.Name]{Start: rrT.Hdr.Name, End: rrT.NextDomain}) {
-						// fmt.Printf("added entry %v\n", rrT)
-						expanded = true
-					}
+
+			for _, rrT := range nsecSigs {
+				if wz.addKnown(rrT, knownRanges, rangeset.RangeEntry[dns.Name]{Start: rrT.Hdr.Name, End: rrT.NextDomain}) {
+					expanded = true
 				}
 			}
 
@@ -433,6 +432,39 @@ func _getMiddle(zone dns.Name, rn rangeset.RangeEntry[dns.Name]) iter.Seq[dns.Na
 
 		startNum := &big.Int{}
 		endNum := &big.Int{}
+		diff := &big.Int{}
+		rnd := rand.New(rand.NewSource(rand.Int63()))
+		var err error
+
+		for _, nc := range []*nameConverter{ncAscii, ncSymbols, ncFull} {
+			startNum, err = nc.nameToNum(rn.Start)
+			if err != nil {
+				continue
+			}
+
+			if rn.End == zone {
+				endNum, err = nc.getZoneEndNum(rn.End)
+			} else {
+				endNum, err = nc.nameToNum(rn.End)
+			}
+
+			if err != nil {
+				continue
+			}
+
+			diff.Sub(endNum, startNum)
+
+			diff.Rand(rnd, diff)
+			diff.Add(diff, startNum)
+			midName, err := nc.numToName(diff)
+			if err != nil {
+				continue
+			}
+
+			if !yield(midName) {
+				return
+			}
+		}
 
 		for _, lc := range []*labelConverter{lcAscii, lcSymbols, lcFull} {
 			startNum.Set(big0)

@@ -686,12 +686,9 @@ func processGuess(wz *nsec3WalkZone, cancel context.CancelFunc, guess hashEntry)
 	}
 	var sawThis bool
 
-	for _, rr := range res.Ns {
-		rrT, ok := rr.(*dns.NSEC3)
-		if !ok {
-			continue
-		}
-		dns.Canonicalize(rrT)
+	_, nsec3s := filteredNsecs(wz.zone, res)
+
+	for _, rrT := range nsec3s {
 		if !(rrT.Salt == wz.nsec3Param.Salt && rrT.Iterations == wz.nsec3Param.Iterations) {
 			// params changed in the middle of the walk
 			wz.mux.Lock()

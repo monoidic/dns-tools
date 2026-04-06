@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"iter"
 	"strings"
+	"sync"
 
 	"github.com/monoidic/dns"
 )
@@ -27,30 +28,51 @@ func performAxfr(msg dns.Msg, rrDataChan chan<- rrData, ns string) error {
 		return err
 	}
 
+	var wg sync.WaitGroup
+	var mux sync.RWMutex
+
 	for e := range env {
-		if e.Error != nil {
-			return e.Error
-		}
-
-		for _, rr := range e.RR {
-			switch rr.(type) {
-			case *dns.NSEC, *dns.NSEC3, *dns.RRSIG:
-				continue
+		wg.Go(func() {
+			if e.Error != nil {
+				mux.Lock()
+				err = e.Error
+				mux.Unlock()
+				return
 			}
 
-			dns.Canonicalize(rr)
-			rrValue := rr.String()
-			header := rr.Header()
-
-			rrDataChan <- rrData{
-				zone:     zone,
-				rrValue:  rrValue,
-				rrType:   dns.TypeToString[header.Rrtype],
-				rrName:   header.Name,
-				msgtype:  rrDataRegular,
-				selfZone: true,
+			mux.RLock()
+			errSet := err != nil
+			mux.RUnlock()
+			if errSet {
+				return
 			}
-		}
+
+			for _, rr := range e.RR {
+				switch rr.(type) {
+				case *dns.NSEC, *dns.NSEC3, *dns.RRSIG:
+					continue
+				}
+
+				dns.Canonicalize(rr)
+				rrValue := rr.String()
+				header := rr.Header()
+
+				rrDataChan <- rrData{
+					zone:     zone,
+					rrValue:  rrValue,
+					rrType:   dns.TypeToString[header.Rrtype],
+					rrName:   header.Name,
+					msgtype:  rrDataRegular,
+					selfZone: true,
+				}
+			}
+		})
+	}
+
+	wg.Wait()
+
+	if err != nil {
+		return err
 	}
 
 	rrDataChan <- rrData{

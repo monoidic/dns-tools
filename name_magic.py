@@ -13,7 +13,7 @@ all_bytes = bytes(range(256))
 brief = b"-0123456789_abcdefghijklmnopqrstuvwxyz"
 testing = b"123"
 
-LABEL_LIMIT = 3
+LABEL_LIMIT = 5
 ALPHABET = testing
 MAX_NAME_LEN = 11
 
@@ -95,7 +95,7 @@ class NameConverter:
             pre_update = bytes(first_label)
             post_update = le.increment_label(first_label)
             labels[0] = post_update
-            log(f"incremented label from {pre_update} to {bytes(post_update)}")
+            log(f"incremented label from {pre_update!r} to {bytes(post_update)!r}")
             return self._name_from_labels(labels)
 
         # first was max
@@ -177,8 +177,9 @@ class NameConverter:
 
         # while i < self.max_name_num:
         while name != self.max_name:
-            name = self.increment_name(name)
-            assert name
+            namex = self.increment_name(name)
+            assert namex
+            name = namex
             i += 1
             if True:
                 print(i, bytes(name), len(name))
@@ -293,7 +294,7 @@ class NameConverter:
                 new_v_idx = old_v_idx + steps
                 new_v = self.alphabet[new_v_idx : new_v_idx + 1]
                 labels[0][-1:] = new_v
-                log(f"stepping {step=}")
+                log(f"stepping {step=} {steps=}")
                 continue
 
             # expand
@@ -309,6 +310,7 @@ class NameConverter:
             # add new label
             num -= 1
             labels.insert(0, bytearray(self.alphabet[:1]))
+            log("adding new label")
 
         return self._name_from_labels(labels)
 
@@ -365,13 +367,39 @@ class NameConverter:
 def main() -> None:
     # nc = NameConverter(ALPHABET, LABEL_LIMIT, MAX_NAME_LEN)
     # nc._exhaust()
-    nc = NameConverter(all_valid, 63, 255)
 
-    print(nc.step_diffs)
-    print(nc.expand_diffs)
+    nc = NameConverter(brief, 63, 255)
 
-    print(nc.max_name)
-    print(nc.max_name_num)
+    # print(nc.step_diffs)
+    # print(nc.expand_diffs)
+
+    # print(nc.max_name)
+    # print(nc.max_name_num)
+
+    # name1 = b"\x07example\x03com\x00"
+    # name1 = b"\x07example\x03com\x00"
+
+    # llen = 48
+    llen = 32
+    name1 = (
+        (bytes([llen]) + b"a" * llen)
+        + (b"\x3f" + b"a" * 63) * 3
+        + b"\x07example\x03com\x00"
+    )
+    num = nc.name_to_num(bytearray(name1))
+    assert num
+    print(num)
+    name2 = nc.num_to_name(num)
+    assert name2
+    print(bytes(name2))
+
+    idx = 255 - len(name2) - 2
+    if idx >= 0:
+        x = nc.num_to_name(num + nc.step_diffs[idx][0] * len(nc.alphabet))
+        assert x
+        print(bytes(x))
+    else:
+        print("impossible")
 
 
 if __name__ == "__main__":

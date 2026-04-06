@@ -209,12 +209,12 @@ CREATE TABLE IF NOT EXISTS zone_walk_res
 );
 
 INSERT OR IGNORE INTO nsec_state (id, name) VALUES
-(1, 'unknown'       ),
-(2, 'secure_nsec'   ),
-(3, 'plain_nsec'    ),
-(4, 'nsec3'         ),
-(5, 'nsec_confusion'),
-(6, 'secure_nsec3'  );
+(1, 'unknown'     ),
+(2, 'secure_nsec' ),
+(3, 'plain_nsec'  ),
+(4, 'nsec3'       ),
+(5, 'bogus'       ),
+(6, 'secure_nsec3');
 
 CREATE TABLE IF NOT EXISTS chaos_query
 (
