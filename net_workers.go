@@ -666,10 +666,12 @@ func addrResolve(connCache *connCache, msg *dns.Msg, fd *retryWrap[nameData, add
 }
 
 // `processsData` function
-func parentCheckResolve(connCache *connCache, msg *dns.Msg, cpIn *retryWrap[childParent, empty]) (cp childParent, err error) {
-	cp = cpIn.val
+func parentCheckResolve(connCache *connCache, msg *dns.Msg, cpIn *retryWrap[nameData, empty]) (cp childParent, err error) {
+	cp.parentGuess = cpIn.val.name
+	cp.childID = cpIn.val.id
+	parentGuess := cp.parentGuess
 
-	msg.Question[0].Name = cp.parentGuess
+	msg.Question[0].Name = parentGuess
 	var res *dns.Msg
 
 	res, err = plainResolveRandom(msg, connCache)
@@ -680,12 +682,14 @@ func parentCheckResolve(connCache *connCache, msg *dns.Msg, cpIn *retryWrap[chil
 	var soa *dns.SOA
 
 parentCheckSOALoop:
-	for _, rrL := range [][]dns.RR{res.Ns, res.Answer} {
+	for _, rrL := range [][]dns.RR{res.Answer, res.Ns} {
 		for _, rr := range rrL {
 			switch rrT := rr.(type) {
 			case *dns.SOA:
-				soa = rrT
-				break parentCheckSOALoop
+				if dns.IsSubDomain(rrT.Hdr.Name, parentGuess) {
+					soa = rrT
+					break parentCheckSOALoop
+				}
 			}
 		}
 	}
@@ -693,9 +697,8 @@ parentCheckSOALoop:
 	if soa != nil {
 		dns.Canonicalize(soa)
 		realParent := soa.Hdr.Name
-		cp.parent.name = realParent
+		cp.realParent = realParent
 		cp.resolved = true
-		cp.registered = res.Rcode != dns.RcodeNameError
 	}
 
 	return
@@ -898,7 +901,7 @@ func addrResolverWorker(dataChan <-chan retryWrap[nameData, addrData], refeedCha
 }
 
 // `resolverWorker` wrapper to query for zone parents
-func parentCheckWorker(dataChan <-chan retryWrap[childParent, empty], refeedChan chan<- retryWrap[childParent, empty], outChan chan<- childParent, retryWg *sync.WaitGroup, tsm *TableStmtMap) {
+func parentCheckWorker(dataChan <-chan retryWrap[nameData, empty], refeedChan chan<- retryWrap[nameData, empty], outChan chan<- childParent, retryWg *sync.WaitGroup, tsm *TableStmtMap) {
 	msg := dns.Msg{
 		MsgHdr: dns.MsgHdr{
 			Opcode:           dns.OpcodeQuery,
@@ -913,4 +916,11 @@ func parentCheckWorker(dataChan <-chan retryWrap[childParent, empty], refeedChan
 	msgSetSize(&msg)
 
 	resolverWorker(dataChan, refeedChan, outChan, &msg, parentCheckResolve, retryWg)
+}
+
+func parentCheckPreWorker(dataChan <-chan retryWrap[childParent, empty], refeedChan chan<- retryWrap[childParent, empty], outChan chan<- childParent, retryWg *sync.WaitGroup, tsm *TableStmtMap) {
+	for cp := range dataChan {
+		outChan <- cp.val
+		retryWg.Done()
+	}
 }

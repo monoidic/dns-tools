@@ -263,3 +263,17 @@ CREATE TABLE IF NOT EXISTS nsec3_hash_rr_map
     rr_type_id      INTEGER NOT NULL REFERENCES rr_type(id),
     UNIQUE(nsec3_hash_id, rr_type_id)
 );
+
+CREATE TABLE IF NOT EXISTS parent_map_name
+(
+    id      INTEGER PRIMARY KEY,
+    name    TEXT UNIQUE NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS parent_map
+(
+    id          INTEGER PRIMARY KEY,
+    child_id    INTEGER NOT NULL REFERENCES name(id),
+    parent_id   INTEGER NOT NULL REFERENCES parent_map_name(id),
+    UNIQUE(child_id, parent_id)
+);

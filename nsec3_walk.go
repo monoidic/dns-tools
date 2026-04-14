@@ -530,7 +530,7 @@ func printHashcat(start Nsec3Hash, rr *dns.NSEC3, zone string) {
 
 func nsec3WalkInsert(tsm *TableStmtMap, zw *nsec3WalkZone) {
 	zoneID := zw.id
-	// zone := zw.zone.String()
+	zone := zw.zone.String()
 
 	buf := make([]byte, 32)
 
@@ -555,7 +555,7 @@ func nsec3WalkInsert(tsm *TableStmtMap, zw *nsec3WalkZone) {
 			tsm.exec("hash_rrtype", zoneID, hash, rrTypeID)
 		}
 
-		// printHashcat(start, rr, zone)
+		printHashcat(start, rr, zone)
 	}
 
 	if zw.err != nil {
