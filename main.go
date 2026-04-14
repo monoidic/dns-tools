@@ -72,7 +72,7 @@ var flags = map[string]*flagData{
 	"parent_ns":         {description: "fetch nameservers and glue A/AAAA records directly from a zone's parent zone", function: getParentNS},
 	"unregistered":      {description: "check if domain appears in DNS", function: getUnregisteredDomains},
 	"psl":               {description: "insert TLDs from PSL", function: insertPSL},
-	"validate":          {description: "check if zones are valid", function: validateZones},
+	"validate":          {description: "check if names are valid", function: validateNames},
 	"spf":               {description: "attempt to fetch SPF records", function: spf},
 	"spf_links":         {description: "attempt to fetch linked SPF records", function: spfLinks},
 	"dmarc":             {description: "attempt to fetch DMARC records", function: dmarc},

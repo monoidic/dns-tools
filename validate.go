@@ -218,12 +218,10 @@ func insertPSL(db *sql.DB) {
 	readerWriter("inserting TLDs from PSL", db, getTLDs, tldListWriter)
 }
 
-func validateZones(db *sql.DB) {
-	readerWriter("validating zones", db, getDbNameData(`
-	SELECT zone.name, zone.id
-	FROM name AS zone
-	WHERE zone.valid_tried=FALSE
-	AND zone.is_zone=TRUE AND zone.registered=TRUE AND zone.valid=TRUE
+func validateNames(db *sql.DB) {
+	readerWriter("validating names", db, getDbNameData(`
+	SELECT name.name, name.id
+	WHERE name.valid_tried=FALSE
 `, db), validWriter)
 }
 

@@ -29,7 +29,7 @@ func mapZoneParentsPre(db *sql.DB) {
 	SELECT zone.name, zone.id
 	FROM name AS zone
 	WHERE zone.parent_mapped=FALSE
-	AND zone.is_zone=TRUE AND zone.registered=TRUE AND zone.valid=TRUE
+	AND zone.registered=TRUE AND zone.valid=TRUE
 `, db), mapZoneParentsPreWriter)
 }
 
