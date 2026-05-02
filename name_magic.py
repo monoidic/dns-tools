@@ -377,38 +377,29 @@ def main() -> None:
     # print(nc.max_name_num)
 
     # name1 = b"\x07example\x03com\x00"
-    name1 = b"\x07example\x03com\x00"
+    # name1 = b"\x07example\x03com\x00"
 
     # llen = 48
-    """
     llen = 32
     name1 = (
         (bytes([llen]) + b"a" * llen)
         + (b"\x3f" + b"a" * 63) * 3
         + b"\x07example\x03com\x00"
     )
-    """
+    num = nc.name_to_num(bytearray(name1))
+    assert num
+    print(num)
+    name2 = nc.num_to_name(num)
+    assert name2
+    print(bytes(name2))
 
-    for alphabet in [testing, brief, all_valid, all_bytes]:
-        nc = NameConverter(alphabet, 63, 255)
-        labels = nc._name_to_labels(name1)
-        if not all(c in alphabet for label in labels for c in label):
-            continue
-        num = nc.name_to_num(bytearray(name1))
-        assert num
-        # print(num)
-        name2 = nc.num_to_name(num)
-        assert name2
-        # print(bytes(name2))
-
-        idx = 255 - len(name2) - 2
-        if idx >= 0:
-            addend = nc.step_diffs[idx][0] * len(nc.alphabet) + 1
-            x = nc.num_to_name(num + addend)
-            assert x
-            print(bytes(x))
-        else:
-            print("impossible")
+    idx = 255 - len(name2) - 2
+    if idx >= 0:
+        x = nc.num_to_name(num + nc.step_diffs[idx][0] * len(nc.alphabet))
+        assert x
+        print(bytes(x))
+    else:
+        print("impossible")
 
 
 if __name__ == "__main__":
