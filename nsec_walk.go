@@ -163,6 +163,19 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[dns.Name]) {
 	var thisDuped bool
 
 	unknowns = slices.Collect(wz.unknownRanges(knownRanges))
+
+	if len(unknowns) == 1 {
+		unk := unknowns[0]
+		for subdomain := range subdomains {
+			subRange, ok := genSubdomainRange(subdomain)
+			if ok && dns.Compare(subRange.Start, unk.Start) <= 0 && dns.Compare(subRange.End, unk.End) >= 0 {
+				log.Printf("skipping subrange %s (covers %s)", subRange, unk)
+				unknowns = nil
+				break
+			}
+		}
+	}
+
 unkRanges:
 	for _, rn := range unknowns {
 		if rn == thisRn {
@@ -195,6 +208,25 @@ unkRanges:
 		delete(wz.seenCounter, thisRn)
 		wz.mux.Unlock()
 	}
+}
+
+func genSubdomainRange(subdomain dns.Name) (rangeset.RangeEntry[dns.Name], bool) {
+	for _, nc := range []*nameConverter{ncAscii, ncSymbols, ncFull} {
+		end, err := nc.getZoneEndNum(subdomain)
+		if err != nil {
+			continue
+		}
+		end.Add(end, big1)
+		endName, err := nc.numToName(end)
+		if err != nil {
+			continue
+		}
+
+		ret := rangeset.RangeEntry[dns.Name]{Start: subdomain, End: endName}
+		return ret, true
+	}
+
+	return rangeset.RangeEntry[dns.Name]{}, false
 }
 
 func nsecWalkResolve(_ *connCache, _ *dns.Msg, zd *retryWrap[nameData, empty]) (*walkZone, error) {
@@ -503,7 +535,11 @@ func _getMiddle(zone dns.Name, rn rangeset.RangeEntry[dns.Name]) iter.Seq[dns.Na
 			// clamp according to protocol-defined max label/name limits
 			splitALen = min(splitALen, MAX_NAME_LEN-commonLen-2, MAX_LABEL_LEN)
 			for splitS := range lc.bisectLabel(startNum, endNum, splitALen) {
-				if res, err := dns.NameFromLabels(append([]string{splitS}, common...)); err == nil && !yield(res) {
+				res, err := dns.NameFromLabels(append([]string{splitS}, common...))
+				if err != nil {
+					continue
+				}
+				if !yield(res) {
 					return
 				}
 			}
