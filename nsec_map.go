@@ -54,7 +54,7 @@ func getNsecState(nsecSigs []*dns.NSEC, nsec3Sigs []*dns.NSEC3) (string, string,
 				decoded := s.ToWire()
 				if len(decoded) > 1 {
 					switch decoded[1] {
-					case '\x00', '!', '~':
+					case '\x00', '!', '~', '/':
 						nsecType = "secure_nsec"
 					}
 				}
