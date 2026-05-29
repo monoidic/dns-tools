@@ -221,6 +221,7 @@ func insertPSL(db *sql.DB) {
 func validateNames(db *sql.DB) {
 	readerWriter("validating names", db, getDbNameData(`
 	SELECT name.name, name.id
+	FROM name
 	WHERE name.valid_tried=FALSE
 `, db), validWriter)
 }
