@@ -137,10 +137,10 @@ func spfWrite(tsm *TableStmtMap, fdr fdResults) {
 		}
 		tsm.exec("spf_valid", err == nil, data.anyUnknown, err_s, recordID)
 		if err == nil {
-			for i, list := range [][]string{data.names, data.spfNames} {
+			for i, list := range [][]dns.Name{data.names, data.spfNames} {
 				spfName := i == 1
 				for _, name := range list {
-					spfNameID := tsm.get("name", name)
+					spfNameID := tsm.get("name", name.String())
 					tsm.exec("spfname", spfNameID, recordID, spfName)
 				}
 			}

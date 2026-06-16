@@ -127,6 +127,8 @@ func getTLDs(yield func(dns.Name) bool) {
 			return
 		}
 	}
+
+	check(scanner.Err())
 }
 
 func tldListWriter(db *sql.DB, seq iter.Seq[dns.Name]) {

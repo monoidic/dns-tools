@@ -22,6 +22,7 @@ func readDomainLists(fileChan <-chan string, domainChan chan<- dns.Name) {
 			domainChan <- s
 		}
 
+		check(scanner.Err())
 		check(fp.Close())
 	}
 }

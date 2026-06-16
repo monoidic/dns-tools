@@ -98,8 +98,8 @@ var (
 
 type spfData struct {
 	terms      []any
-	names      []string
-	spfNames   []string
+	names      []dns.Name
+	spfNames   []dns.Name
 	anyUnknown bool
 }
 
@@ -173,9 +173,17 @@ extractDataL:
 		}
 		name = strings.ToLower(name)
 		if isSPFName {
-			data.spfNames = append(data.spfNames, name)
+			nameE, err := dns.NameFromString(name)
+			if err != nil {
+				return err
+			}
+			data.spfNames = append(data.spfNames, nameE)
 		} else {
-			data.names = append(data.names, name)
+			nameE, err := dns.NameFromString(name)
+			if err != nil {
+				return err
+			}
+			data.names = append(data.names, nameE)
 		}
 	}
 	return nil
