@@ -37,7 +37,7 @@ main() {
     done
 
     scan -nsec_map
-    scan -zone_walk
+    scan -zone_walk -nsec_forever
 
     print_out
 

@@ -134,7 +134,7 @@ func zoneRandomName(zone dns.Name) dns.Name {
 	if remaining := MAX_NAME_LEN - zone.EncodedLen() - 2; remaining < MAX_LABEL_LEN {
 		label = string(randomLabelLen(max(1, remaining-2), remaining)[1:])
 	} else {
-		label = string(randomLabel()[1:])
+		label = string(randomLabel()[1:][:8])
 	}
 	labels := zone.SplitRaw()
 

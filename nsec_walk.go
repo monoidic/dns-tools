@@ -20,7 +20,7 @@ import (
 type walkZone struct {
 	zone        dns.Name
 	id          int64
-	rrTypeChan  chan dns.RR
+	rrTypeChan  chan signedPairs
 	sem         *semaphore.Weighted
 	wg          *sync.WaitGroup
 	pool        *sync.Pool
@@ -38,7 +38,6 @@ func (wz *walkZone) addKnown(rr dns.RR, rs *rangeset.RangeSet[dns.Name], rn rang
 	}
 
 	rs.Add(rn)
-	wz.rrTypeChan <- rr
 
 	return true
 }
@@ -117,24 +116,26 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[dns.Name]) {
 				continue
 			}
 
+			categorized := sortMsg(msg)
+			wz.rrTypeChan <- categorized
+
 			var foundSubdomains bool
-			for _, rr := range msg.Ns {
-				switch rrT := rr.(type) {
-				case *dns.SOA:
-					dns.Canonicalize(rrT)
-					if soaZone := rrT.Hdr.Name; dns.Compare(zone, soaZone) != 0 && dns.IsSubDomain(zone, soaZone) {
-						// fmt.Printf("found subdomain %s of domain %s\n", soaZone, zone)
-						wz.rrTypeChan <- rr
-						foundSubdomains = true
-						subdomains.Add(soaZone)
-					}
-				case *dns.RRSIG:
-					dns.Canonicalize(rrT)
-					if rrsigZone := rrT.SignerName; dns.Compare(zone, rrsigZone) != 0 && dns.IsSubDomain(zone, rrsigZone) {
-						// fmt.Printf("found subdomain %s of domain %s\n", soaZone, zone)
-						wz.rrTypeChan <- rr
-						foundSubdomains = true
-						subdomains.Add(rrsigZone)
+
+			for _, pair := range categorized.signed {
+				rrsigZone := pair.sig.SignerName
+				if zone != rrsigZone && dns.IsSubDomain(zone, rrsigZone) {
+					foundSubdomains = true
+					subdomains.Add(rrsigZone)
+				}
+
+				switch pair.sig.TypeCovered {
+				case dns.TypeSOA:
+					for _, rr := range pair.rrset {
+						soa := rr.(*dns.SOA)
+						if soaZone := soa.Hdr.Name; dns.Compare(zone, soaZone) != 0 && dns.IsSubDomain(zone, soaZone) {
+							foundSubdomains = true
+							subdomains.Add(soaZone)
+						}
 					}
 				}
 			}
@@ -210,6 +211,60 @@ unkRanges:
 	}
 }
 
+type signedRRs struct {
+	sig   *dns.RRSIG
+	rrset []dns.RR
+}
+
+type signKey struct {
+	name   dns.Name
+	rrType dns.Type
+}
+
+type signedPairs struct {
+	signed []signedRRs
+}
+
+func sortMsg(msg *dns.Msg) (ret signedPairs) {
+	// kind of assumes the message is "normal"
+	// at least enough to pass DNSSEC validation from a decent recursive resolver
+
+	signSigs := make(map[signKey]*dns.RRSIG)
+	signRRs := make(map[signKey][]dns.RR)
+
+	for _, list := range [][]dns.RR{msg.Answer, msg.Ns, msg.Extra} {
+		for _, rr := range list {
+			dns.Canonicalize(rr)
+			switch rrT := rr.(type) {
+			case *dns.RRSIG:
+				key := signKey{name: rrT.Hdr.Name, rrType: rrT.TypeCovered}
+				signSigs[key] = rrT
+			default:
+				hdr := rr.Header()
+				key := signKey{name: hdr.Name, rrType: hdr.Rrtype}
+				signRRs[key] = append(signRRs[key], rr)
+			}
+		}
+
+		for k, sig := range signSigs {
+			rrset, ok := signRRs[k]
+			if !ok {
+				continue
+			}
+			entry := signedRRs{
+				sig:   sig,
+				rrset: rrset,
+			}
+			ret.signed = append(ret.signed, entry)
+		}
+
+		clear(signSigs)
+		clear(signRRs)
+	}
+
+	return
+}
+
 func genSubdomainRange(subdomain dns.Name) (rangeset.RangeEntry[dns.Name], bool) {
 	for _, nc := range []*nameConverter{ncAscii, ncSymbols, ncFull} {
 		end, err := nc.getZoneEndNum(subdomain)
@@ -233,7 +288,7 @@ func nsecWalkResolve(_ *connCache, _ *dns.Msg, zd *retryWrap[nameData, empty]) (
 	wz := &walkZone{
 		zone:        zd.val.name,
 		id:          zd.val.id,
-		rrTypeChan:  make(chan dns.RR, MIDBUFLEN),
+		rrTypeChan:  make(chan signedPairs, MIDBUFLEN),
 		sem:         semaphore.NewWeighted(1000),
 		wg:          &sync.WaitGroup{},
 		pool:        &sync.Pool{},
@@ -341,46 +396,50 @@ func nsecWalkResWrite(tsm *TableStmtMap, res nsecWalkResolveRes) {
 	tsm.exec("queried", res.id)
 }
 
-func nsecWalkInsert(tsm *TableStmtMap, zw *walkZone) {
-	zoneID := zw.id
+func nsecWalkInsert(tsm *TableStmtMap, wz *walkZone) {
+	zoneID := wz.id
 
 	addSubdomain := func(subdomain dns.Name) {
+		if wz.zone == subdomain || !dns.IsSubDomain(wz.zone, subdomain) {
+			return
+		}
+
 		childZoneID := tsm.get("name", subdomain.String())
 		tsm.exec("name_to_zone", childZoneID)
 		tsm.exec("subdomain", zoneID, childZoneID)
 	}
 
-rrLoop:
-	for rr := range zw.rrTypeChan {
-		// NSEC, SOA or RRSIG
-		switch rrT := rr.(type) {
-		case *dns.SOA:
-			addSubdomain(rrT.Hdr.Name)
-			continue rrLoop
-		case *dns.RRSIG:
-			addSubdomain(rrT.SignerName)
-			continue rrLoop
-		}
+	for pairs := range wz.rrTypeChan {
+		for _, pair := range pairs.signed {
+			name := getSigName(pair.sig)
+			addSubdomain(name)
+			rrNameID := tsm.get("rr_name", name.String())
 
-		rrT := rr.(*dns.NSEC)
-		rrName := rrT.Hdr.Name
-		rrNameID := tsm.get("rr_name", rrName.String())
-		// TODO detect wildcards via dns.RRSIG.Labels?
+			switch pair.sig.TypeCovered {
+			case dns.TypeSOA:
+				for _, rr := range pair.rrset {
+					soa := rr.(*dns.SOA)
+					addSubdomain(soa.Hdr.Name)
+				}
 
-	rrtLoop:
-		for rrType := range rrT.TypeBitMap.Iter {
-			switch rrType {
-			case dns.TypeNSEC, dns.TypeRRSIG:
-				// skip
-				continue rrtLoop
+			case dns.TypeNSEC:
+				for _, rr := range pair.rrset {
+					nsec := rr.(*dns.NSEC)
+
+				rrtLoop:
+					for rrType := range nsec.TypeBitMap.Iter {
+						switch rrType {
+						case dns.TypeNSEC, dns.TypeRRSIG:
+							// skip
+							continue rrtLoop
+						}
+
+						rrTypeID := tsm.get("rr_type", rrType.String())
+
+						tsm.exec("walk_res", zoneID, rrNameID, rrTypeID)
+					}
+				}
 			}
-			if rrType == dns.TypeNS && rrName != zw.zone {
-				addSubdomain(rrName)
-			}
-
-			rrTypeID := tsm.get("rr_type", rrType.String())
-
-			tsm.exec("walk_res", zoneID, rrNameID, rrTypeID)
 		}
 	}
 
@@ -468,36 +527,6 @@ func _getMiddle(zone dns.Name, rn rangeset.RangeEntry[dns.Name]) iter.Seq[dns.Na
 		rnd := rand.New(rand.NewSource(rand.Int63()))
 		var err error
 
-		for _, nc := range []*nameConverter{ncAscii, ncSymbols, ncFull} {
-			startNum, err = nc.nameToNum(rn.Start)
-			if err != nil {
-				continue
-			}
-
-			if rn.End == zone {
-				endNum, err = nc.getZoneEndNum(rn.End)
-			} else {
-				endNum, err = nc.nameToNum(rn.End)
-			}
-
-			if err != nil {
-				continue
-			}
-
-			diff.Sub(endNum, startNum)
-
-			diff.Rand(rnd, diff)
-			diff.Add(diff, startNum)
-			midName, err := nc.numToName(diff)
-			if err != nil {
-				continue
-			}
-
-			if !yield(midName) {
-				return
-			}
-		}
-
 		for _, lc := range []*labelConverter{lcAscii, lcSymbols, lcFull} {
 			startNum.Set(big0)
 			endNum.Set(lc.maxLabelNum)
@@ -561,10 +590,43 @@ func _getMiddle(zone dns.Name, rn rangeset.RangeEntry[dns.Name]) iter.Seq[dns.Na
 				}
 			}
 		}
+
+		for _, nc := range []*nameConverter{ncAscii, ncSymbols, ncFull} {
+			startNum, err = nc.nameToNum(rn.Start)
+			if err != nil {
+				continue
+			}
+
+			if rn.End == zone {
+				endNum, err = nc.getZoneEndNum(rn.End)
+			} else {
+				endNum, err = nc.nameToNum(rn.End)
+			}
+
+			if err != nil {
+				continue
+			}
+
+			diff.Sub(endNum, startNum)
+
+			diff.Rand(rnd, diff)
+			diff.Add(diff, startNum)
+			midName, err := nc.numToName(diff)
+			if err != nil {
+				continue
+			}
+
+			if !yield(midName) {
+				return
+			}
+		}
 	}
 }
 
 func getMiddle(zone dns.Name, rn rangeset.RangeEntry[dns.Name]) iter.Seq[dns.Name] {
+	// TODO
+	// dig +dnssec hxbwmwbduhp.mil.cl => sinkhole
+	// dig +dnssec  xbwmwbduhp.mil.cl => answer
 	return func(yield func(dns.Name) bool) {
 		for res := range _getMiddle(zone, rn) {
 			if !(dns.IsSubDomain(zone, res) && dns.Compare(rn.Start, res) <= 0 && (rn.End == zone || dns.Compare(res, rn.End) == -1)) {
@@ -575,4 +637,16 @@ func getMiddle(zone dns.Name, rn rangeset.RangeEntry[dns.Name]) iter.Seq[dns.Nam
 			}
 		}
 	}
+}
+
+func getSigName(sig *dns.RRSIG) dns.Name {
+	if sig.Hdr.Name.CountLabel() == int(sig.Labels) {
+		return sig.Hdr.Name
+	}
+
+	// wildcard
+	split := sig.Hdr.Name.SplitRaw()
+	split = split[len(split)-int(sig.Labels):]
+	split = append([]string{"*"}, split...)
+	return check1(dns.NameFromLabels(split))
 }
