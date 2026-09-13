@@ -293,7 +293,7 @@ func getZone2RR(filter string, db *sql.DB) iter.Seq[rrDBData] {
 		tx := check1(db.Begin())
 		defer func() { check(tx.Commit()) }()
 		rows := check1(tx.Query(qs))
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 
 		for rows.Next() {
 			var ad rrDBData
@@ -326,7 +326,7 @@ func getUnqueriedNsecRes(db *sql.DB) iter.Seq[rrDBData] {
 		INNER JOIN rr_name ON zone_walk_res.rr_name_id=rr_name.id
 		WHERE zone_walk_res.queried=FALSE
 	`))
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 
 		for rows.Next() {
 			rrD := rrDBData{fromSelf: true}

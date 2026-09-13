@@ -105,7 +105,7 @@ func validInsert(tsm *TableStmtMap, zv zoneValid) {
 
 func getTLDs(yield func(dns.Name) bool) {
 	fp := check1(os.Open("misc/tld.txt"))
-	defer fp.Close()
+	defer func() { _ = fp.Close() }()
 
 	scanner := bufio.NewScanner(fp)
 
@@ -186,12 +186,12 @@ func maybeZoneResolve(connCache *connCache, msg *dns.Msg, fd *retryWrap[nameData
 		return
 	}
 
-	if response == nil || response.MsgHdr.Rcode == dns.RcodeServerFailure {
+	if response == nil || response.Rcode == dns.RcodeServerFailure {
 		zm.servfail = true
 		return
 	}
 
-	if response.MsgHdr.Rcode == dns.RcodeNameError { // nxdomain
+	if response.Rcode == dns.RcodeNameError { // nxdomain
 		zm.nxdomain = true
 		return
 	}

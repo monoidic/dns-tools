@@ -348,7 +348,7 @@ cookieFromMsgLoop:
 
 // close connCache connections on cache eviction
 func connCacheEviction(_ context.Context, _ ttlcache.EvictionReason, item *ttlcache.Item[string, *dns.Conn]) {
-	item.Value().Close()
+	_ = item.Value().Close()
 }
 
 func plainResolveRandom(msg *dns.Msg, connCache *connCache) (*dns.Msg, error) {

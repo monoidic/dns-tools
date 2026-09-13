@@ -241,7 +241,7 @@ func checkUpReader(db *sql.DB) iter.Seq[checkUpData] {
 			GROUP BY ip.id
 		`, v4Filter)
 		rows := check1(tx.Query(qs))
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 
 		for rows.Next() {
 			var ip, zone string
@@ -274,7 +274,7 @@ func zoneIPReader(db *sql.DB) iter.Seq[zoneIP] {
 		tx := check1(db.Begin())
 		defer func() { check(tx.Commit()) }()
 		rows := check1(tx.Query(qs))
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 
 		for rows.Next() {
 			var zip zoneIP

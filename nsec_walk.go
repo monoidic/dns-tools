@@ -28,7 +28,8 @@ type walkZone struct {
 	seenCounter map[rangeset.RangeEntry[dns.Name]]int
 }
 
-func (wz *walkZone) addKnown(rr dns.RR, rs *rangeset.RangeSet[dns.Name], rn rangeset.RangeEntry[dns.Name]) bool {
+func (wz *walkZone) addKnown(rrT *dns.NSEC, rs *rangeset.RangeSet[dns.Name]) bool {
+	rn := rangeset.RangeEntry[dns.Name]{Start: rrT.Hdr.Name, End: rrT.NextDomain}
 	if !dns.IsSubDomain(wz.zone, rn.Start) {
 		return false
 	}
@@ -119,6 +120,16 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[dns.Name]) {
 			categorized := sortMsg(msg)
 			wz.rrTypeChan <- categorized
 
+			if subdomain, ok := categorized.descendedIntoSubdomain(zone); ok {
+				subdomains.Add(subdomain)
+				rn, ok := genSubdomainRange(subdomain)
+				if !ok {
+					continue
+				}
+				knownRanges.Add(rn)
+				break
+			}
+
 			var foundSubdomains bool
 
 			for _, pair := range categorized.signed {
@@ -144,13 +155,17 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[dns.Name]) {
 				continue
 			}
 
-			nsecSigs, _ := filteredNsecs(wz.zone, msg)
-
 			var expanded bool
 
-			for _, rrT := range nsecSigs {
-				if wz.addKnown(rrT, knownRanges, rangeset.RangeEntry[dns.Name]{Start: rrT.Hdr.Name, End: rrT.NextDomain}) {
-					expanded = true
+			for _, pair := range categorized.signed {
+				if pair.sig.TypeCovered != dns.TypeNSEC {
+					continue
+				}
+				for _, rr := range pair.rrset {
+					rrT := rr.(*dns.NSEC)
+					if wz.addKnown(rrT, knownRanges) {
+						expanded = true
+					}
 				}
 			}
 
@@ -222,7 +237,28 @@ type signKey struct {
 }
 
 type signedPairs struct {
-	signed []signedRRs
+	signed   []signedRRs
+	unsigned []dns.RR
+}
+
+func (sp *signedPairs) descendedIntoSubdomain(zone dns.Name) (ret dns.Name, ok bool) {
+	for _, pair := range sp.signed {
+		if pair.sig.SignerName == zone {
+			return
+		}
+	}
+
+	// no signed matches
+	for _, rr := range sp.unsigned {
+		if soa, ok := rr.(*dns.SOA); ok {
+			if soa.Hdr.Name != zone {
+				return soa.Hdr.Name, true
+			}
+		}
+	}
+
+	// no other SOA
+	return
 }
 
 func sortMsg(msg *dns.Msg) (ret signedPairs) {
@@ -251,11 +287,16 @@ func sortMsg(msg *dns.Msg) (ret signedPairs) {
 			if !ok {
 				continue
 			}
+			delete(signRRs, k)
 			entry := signedRRs{
 				sig:   sig,
 				rrset: rrset,
 			}
 			ret.signed = append(ret.signed, entry)
+		}
+
+		for _, rrs := range signRRs {
+			ret.unsigned = append(ret.unsigned, rrs...)
 		}
 
 		clear(signSigs)
@@ -468,11 +509,11 @@ func _getMiddle(zone dns.Name, rn rangeset.RangeEntry[dns.Name]) iter.Seq[dns.Na
 		splitStart := start.SplitRaw()
 		splitEnd := end.SplitRaw()
 
-		if !(end == zone || end == rootName) && splitEnd == nil {
+		if end != zone && end != rootName && splitEnd == nil {
 			log.Panicf("end splits to nil: %s", end)
 		}
 
-		if (!(start == zone || start == rootName)) && splitStart == nil {
+		if start != zone && start != rootName && splitStart == nil {
 			log.Panicf("start splits to nil: %s", start)
 		}
 
@@ -573,7 +614,10 @@ func _getMiddle(zone dns.Name, rn rangeset.RangeEntry[dns.Name]) iter.Seq[dns.Na
 				}
 			}
 
-			if !(len(splitStartCopy) < len(splitEndCopy) && dns.IsSubDomain(start, end)) {
+			if len(splitStartCopy) >= len(splitEndCopy) {
+				continue
+			}
+			if !dns.IsSubDomain(start, end) {
 				continue
 			}
 
@@ -629,7 +673,13 @@ func getMiddle(zone dns.Name, rn rangeset.RangeEntry[dns.Name]) iter.Seq[dns.Nam
 	// dig +dnssec  xbwmwbduhp.mil.cl => answer
 	return func(yield func(dns.Name) bool) {
 		for res := range _getMiddle(zone, rn) {
-			if !(dns.IsSubDomain(zone, res) && dns.Compare(rn.Start, res) <= 0 && (rn.End == zone || dns.Compare(res, rn.End) == -1)) {
+			if !dns.IsSubDomain(zone, res) {
+				continue
+			}
+			if dns.Compare(rn.Start, res) == 1 {
+				continue
+			}
+			if rn.End != zone && dns.Compare(res, rn.End) != -1 {
 				continue
 			}
 			if !yield(res) {

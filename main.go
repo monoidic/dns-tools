@@ -137,7 +137,7 @@ func getArgs() (*sql.DB, []func(*sql.DB)) {
 	flag.Parse()
 	args = flag.Args()
 
-	if !((networksFile == "" && netCC == "") || (networksFile != "" && netCC != "")) {
+	if (networksFile == "" && netCC != "") || (networksFile != "" && netCC == "") {
 		flag.Usage()
 		fmt.Fprint(os.Stderr, "\nenter none or both of net_file and cc\n")
 		os.Exit(1)

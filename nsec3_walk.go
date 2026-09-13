@@ -689,7 +689,7 @@ func processGuess(wz *nsec3WalkZone, cancel context.CancelFunc, guess hashEntry)
 	_, nsec3s := filteredNsecs(wz.zone, res)
 
 	for _, rrT := range nsec3s {
-		if !(rrT.Salt == wz.nsec3Param.Salt && rrT.Iterations == wz.nsec3Param.Iterations) {
+		if rrT.Salt != wz.nsec3Param.Salt || rrT.Iterations != wz.nsec3Param.Iterations {
 			// params changed in the middle of the walk
 			wz.mux.Lock()
 			wz.err = errors.New("nsec3 params changed")

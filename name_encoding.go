@@ -53,7 +53,7 @@ var (
 // converts a DNS label into a bigint
 func (lc *labelConverter) labelToNum(labelS string) (*big.Int, error) {
 	label := []byte(labelS)
-	if !(1 <= len(label) && len(label) <= MAX_LABEL_LEN) {
+	if len(label) == 0 || len(label) > MAX_LABEL_LEN {
 		return nil, errInvalidLabel
 	}
 
@@ -380,7 +380,7 @@ func (nc *nameConverter) nameToNum(name dns.Name) (*big.Int, error) {
 }
 
 func (nc *nameConverter) numToName(num *big.Int) (dns.Name, error) {
-	if !(num != nil && num.Cmp(big0) >= 0 && num.Cmp(nc.maxNameNum) <= 0) {
+	if num == nil || num.Cmp(big0) == -1 || num.Cmp(nc.maxNameNum) == 1 {
 		return dns.Name{}, errInvalidNameNum
 	}
 	var labelsB [][]byte

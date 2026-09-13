@@ -162,7 +162,7 @@ func axfrWhitelist(seq iter.Seq[zoneIP]) iter.Seq[zoneIP] {
 
 	return func(yield func(zoneIP) bool) {
 		for zip := range seq {
-			if !(AxfrWhitelistedZoneSet.Contains(zip.zone.name) || AxfrWhitelistedIPSet.Contains(zip.ip.name)) {
+			if !AxfrWhitelistedZoneSet.Contains(zip.zone.name) && !AxfrWhitelistedIPSet.Contains(zip.ip.name) {
 				if !yield(zip) {
 					return
 				}
