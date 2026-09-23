@@ -117,16 +117,16 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[dns.Name]) {
 				continue
 			}
 
-			categorized := sortMsg(msg)
+			categorized := sortMsg(msg, wz.zone)
 			wz.rrTypeChan <- categorized
 
 			if subdomain, ok := categorized.descendedIntoSubdomain(zone); ok {
 				subdomains.Add(subdomain)
-				rn, ok := genSubdomainRange(subdomain)
+				subrn, ok := genSubdomainRange(subdomain)
 				if !ok {
 					continue
 				}
-				knownRanges.Add(rn)
+				knownRanges.Add(subrn)
 				break
 			}
 
@@ -151,6 +151,34 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[dns.Name]) {
 				}
 			}
 
+			longestCommon := longestCommonName(rn.Start, rn.End)
+			if longestCommon != wz.zone && dns.IsSubDomain(wz.zone, longestCommon) {
+			optLoop:
+				for _, rr := range msg.Extra {
+					opt, ok := rr.(*dns.OPT)
+					if !ok {
+						continue
+					}
+
+					for _, option := range opt.Option {
+						ede, ok := option.(*dns.EDNS0_EDE)
+						if !ok {
+							continue
+						}
+
+						log.Printf("%s, range %s, name %s\n", ede, rn, middle)
+
+						switch ede.InfoCode {
+						case dns.ExtendedErrorCodeNotAuthoritative, dns.ExtendedErrorCodeNoReachableAuthority:
+							log.Printf("got EDE no reachable authority, range %s, name %s\n", rn, middle)
+							subdomains.Add(longestCommon)
+							foundSubdomains = true
+							break optLoop
+						}
+					}
+				}
+			}
+
 			if foundSubdomains {
 				continue
 			}
@@ -158,7 +186,7 @@ func nsecWalkResolveWorker(wz *walkZone, thisRn rangeset.RangeEntry[dns.Name]) {
 			var expanded bool
 
 			for _, pair := range categorized.signed {
-				if pair.sig.TypeCovered != dns.TypeNSEC {
+				if pair.sig.TypeCovered != dns.TypeNSEC || pair.sig.SignerName != wz.zone {
 					continue
 				}
 				for _, rr := range pair.rrset {
@@ -202,7 +230,6 @@ unkRanges:
 					continue unkRanges
 				}
 			}
-			log.Printf("redoing range %s", rn)
 			if !nsecForever {
 				wz.mux.Lock()
 				wz.seenCounter[thisRn]++
@@ -215,6 +242,7 @@ unkRanges:
 				}
 				wz.mux.Unlock()
 			}
+			log.Printf("redoing range %s", rn)
 		}
 		wz.wg.Go(func() { nsecWalkResolveWorker(wz, rn) })
 	}
@@ -224,6 +252,30 @@ unkRanges:
 		delete(wz.seenCounter, thisRn)
 		wz.mux.Unlock()
 	}
+}
+
+// assumes canonical input
+func longestCommonName(name1, name2 dns.Name) dns.Name {
+	labels1 := name1.SplitRaw()
+	labels2 := name2.SplitRaw()
+
+	labelLen := min(len(labels1), len(labels2))
+
+	for i := range labelLen {
+		label1 := labels1[len(labels1)-1-i]
+		label2 := labels2[len(labels2)-1-i]
+		if label1 == label2 {
+			continue
+		}
+		if i == 0 {
+			return check1(dns.NameFromString("."))
+		}
+		return check1(dns.NameFromLabels(labels1[len(labels1)-i:]))
+	}
+
+	// all checked matched
+
+	return check1(dns.NameFromLabels(labels1[len(labels1)-labelLen:]))
 }
 
 type signedRRs struct {
@@ -242,6 +294,7 @@ type signedPairs struct {
 }
 
 func (sp *signedPairs) descendedIntoSubdomain(zone dns.Name) (ret dns.Name, ok bool) {
+	// TODO entirely empty message, e.g from linhui.de5.net.
 	for _, pair := range sp.signed {
 		if pair.sig.SignerName == zone {
 			return
@@ -250,10 +303,8 @@ func (sp *signedPairs) descendedIntoSubdomain(zone dns.Name) (ret dns.Name, ok b
 
 	// no signed matches
 	for _, rr := range sp.unsigned {
-		if soa, ok := rr.(*dns.SOA); ok {
-			if soa.Hdr.Name != zone {
-				return soa.Hdr.Name, true
-			}
+		if soa, ok := rr.(*dns.SOA); ok && soa.Hdr.Name != zone {
+			return soa.Hdr.Name, true
 		}
 	}
 
@@ -261,7 +312,7 @@ func (sp *signedPairs) descendedIntoSubdomain(zone dns.Name) (ret dns.Name, ok b
 	return
 }
 
-func sortMsg(msg *dns.Msg) (ret signedPairs) {
+func sortMsg(msg *dns.Msg, zone dns.Name) (ret signedPairs) {
 	// kind of assumes the message is "normal"
 	// at least enough to pass DNSSEC validation from a decent recursive resolver
 
@@ -273,6 +324,9 @@ func sortMsg(msg *dns.Msg) (ret signedPairs) {
 			dns.Canonicalize(rr)
 			switch rrT := rr.(type) {
 			case *dns.RRSIG:
+				if rrT.SignerName != zone {
+					continue
+				}
 				key := signKey{name: rrT.Hdr.Name, rrType: rrT.TypeCovered}
 				signSigs[key] = rrT
 			default:
@@ -470,7 +524,7 @@ func nsecWalkInsert(tsm *TableStmtMap, wz *walkZone) {
 				rrtLoop:
 					for rrType := range nsec.TypeBitMap.Iter {
 						switch rrType {
-						case dns.TypeNSEC, dns.TypeRRSIG:
+						case dns.TypeNSEC, dns.TypeRRSIG, dns.TypeNXNAME:
 							// skip
 							continue rrtLoop
 						}
@@ -668,9 +722,6 @@ func _getMiddle(zone dns.Name, rn rangeset.RangeEntry[dns.Name]) iter.Seq[dns.Na
 }
 
 func getMiddle(zone dns.Name, rn rangeset.RangeEntry[dns.Name]) iter.Seq[dns.Name] {
-	// TODO
-	// dig +dnssec hxbwmwbduhp.mil.cl => sinkhole
-	// dig +dnssec  xbwmwbduhp.mil.cl => answer
 	return func(yield func(dns.Name) bool) {
 		for res := range _getMiddle(zone, rn) {
 			if !dns.IsSubDomain(zone, res) {

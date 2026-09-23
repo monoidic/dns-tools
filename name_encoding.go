@@ -197,8 +197,6 @@ func (lc *labelConverter) nextWithLen(num *big.Int, length int, repeatOk bool) (
 }
 
 func (lc *labelConverter) bisectLabel(start, end *big.Int, length int) iter.Seq[string] {
-	// TODO use length for calculating division mask or something
-	// TODO FINISH THIS FUNCTION
 	return func(yield func(string) bool) {
 		var mid big.Int
 
